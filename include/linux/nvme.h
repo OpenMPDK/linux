@@ -284,7 +284,8 @@ struct nvme_id_ctrl {
 	__u8			nvscc;
 	__u8			nwpc;
 	__le16			acwu;
-	__u8			rsvd534[2];
+	__u8			zamds;
+	__u8			rsvd535;
 	__le32			sgls;
 	__le32			mnan;
 	__u8			rsvd544[224];
@@ -327,6 +328,13 @@ struct nvme_lbaf {
 	__u8			rp;
 };
 
+struct nvme_zone_fm {
+	__u64			zs;
+	__u16			lbafs;
+	__u8			zds;
+	__u8			rsvd15[5];
+};
+
 struct nvme_id_ns {
 	__le64			nsze;
 	__le64			ncap;
@@ -363,8 +371,18 @@ struct nvme_id_ns {
 	__u8			nguid[16];
 	__u8			eui64[8];
 	struct nvme_lbaf	lbaf[16];
-	__u8			rsvd192[192];
-	__u8			vs[3712];
+	__u8			rsvd256[64];
+	__u8			fzsze;
+	__u8			nzonef;
+	__u8			rsvd64[6];
+	__u32			nar;
+	__u32			nor;
+	__u32			zal;
+	__u32			rrl;
+	__u8			zoc;
+	__u8			rsvd3776[3495];
+	struct nvme_zone_fm	zonef[4];
+	__u8			vs[256];
 };
 
 enum {
@@ -409,6 +427,9 @@ enum {
 	NVME_NS_DPC_PI_TYPE2	= 1 << 1,
 	NVME_NS_DPC_PI_TYPE1	= 1 << 0,
 	NVME_NS_DPS_PI_FIRST	= 1 << 3,
+	NVME_NS_ZOC_VZC		= 1 << 0,
+	NVME_NS_ZOC_ZE		= 1 << 1,
+	NVME_NS_ZOC_RAZB	= 1 << 2,
 	NVME_NS_DPS_PI_MASK	= 0x7,
 	NVME_NS_DPS_PI_TYPE1	= 1,
 	NVME_NS_DPS_PI_TYPE2	= 2,
@@ -602,6 +623,11 @@ enum nvme_opcode {
 	nvme_cmd_resv_report	= 0x0e,
 	nvme_cmd_resv_acquire	= 0x11,
 	nvme_cmd_resv_release	= 0x15,
+
+	/* ZNS Commands */
+	nvme_cmd_zns_mgmt_send	= 0x79,
+	nvme_cmd_zns_mgmt_rcv	= 0x7a,
+	nvme_cmd_zns_append	= 0x7d,
 };
 
 #define nvme_opcode_name(opcode)	{ opcode, #opcode }
@@ -937,6 +963,7 @@ enum {
 	NVME_LOG_ANA		= 0x0c,
 	NVME_LOG_DISC		= 0x70,
 	NVME_LOG_RESERVATION	= 0x80,
+	NVME_LOG_CHANGED_ZONE_L	= 0xbf,
 	NVME_FWACT_REPL		= (0 << 3),
 	NVME_FWACT_REPL_ACTV	= (1 << 3),
 	NVME_FWACT_ACTV		= (2 << 3),
@@ -1113,6 +1140,46 @@ enum {
 	NVME_IO_CMD_VECTOR_ZONED	= 1 << 1,
 };
 
+#define NVME_ZONE_ZA_ZFC(za)		((za) & (0x1 << 0))
+#define NVME_ZONE_ZA_ZFR(za)		((za) & (0x1 << 1))
+#define NVME_ZONE_ZA_RZR(za)		((za) & (0x1 << 5))
+#define NVME_ZONE_ZA_ZDV(za)		((za) & (0x1 << 6))
+
+enum {
+	NVME_ZONE_ZA_ZFC	= 1 << 0,
+	NVME_ZONE_ZA_ZFR	= 1 << 1,
+	NVME_ZONE_ZA_RZR	= 1 << 5,
+	NVME_ZONE_ZA_ZDV	= 1 << 6,
+};
+
+/*
+ * ZNS subcommands
+ */
+struct nvme_zone {
+	__u8			zt;
+	__u8			zc;
+	__u8			za;
+	__u8			rsvd7[5];
+	__u64			zcap;
+	__u64			zslba;
+	__u64			wp;
+	__u8			rsvd32[32];
+};
+
+struct nvme_zone_report {
+	__u64			nr_zones;
+	__u64			elba;
+	__u8			rsvd[48];
+};
+
+#define NVME_CHANGED_ZONE_LIST_MAX_IDS 511
+
+struct nvme_zone_changed_list {
+	__u16			numids;
+	__u8			rsvd7[6];
+	__u64			ids[NVME_CHANGED_ZONE_LIST_MAX_IDS];
+};
+
 /*
  * Fabrics subcommands.
  */
@@ -1276,6 +1343,63 @@ struct streams_directive_params {
 	__u8	rsvd2[6];
 };
 
+#define NVME_CMD_ZONE_MGMT_SEND_SELECT_ALL(zflags)	((zflags) & 0x1)
+
+#define NVME_ID_NS_ZONE_ZOC_VZC(zoc)			((zoc & 0x1))
+#define NVME_ID_NS_ZONE_ZOC_ZE(zoc)			((zoc >> 1 & 0x1))
+#define NVME_ID_NS_ZONE_ZOC_RAZB(zoc)			((zoc >> 2 & 0x1))
+
+enum {
+	/* Send */
+	NVME_CMD_ZONE_MGMT_SEND_CLOSE		= 0x1,
+	NVME_CMD_ZONE_MGMT_SEND_FINISH		= 0x2,
+	NVME_CMD_ZONE_MGMT_SEND_OPEN		= 0x3,
+	NVME_CMD_ZONE_MGMT_SEND_RESET		= 0x4,
+	NVME_CMD_ZONE_MGMT_SEND_OFFLINE		= 0x5,
+
+	NVME_CMD_ZONE_MGMT_SEND_SZD		= 0x10,
+
+	/* Receive */
+	NVME_CMD_ZONE_MGMT_RCV_REPORT_ZONES	= 0x0,
+	NVME_CMD_ZONE_MGMT_RCV_EXT_REPORT_ZONES	= 0x1,
+
+	NVME_CMD_ZONE_MGMT_RCV_LIST_ALL		= 0x0,
+	NVME_CMD_ZONE_MGMT_RCV_LIST_ZSE		= 0x1,
+	NVME_CMD_ZONE_MGMT_RCV_LIST_ZSIO	= 0x2,
+	NVME_CMD_ZONE_MGMT_RCV_LIST_ZSEO	= 0x3,
+	NVME_CMD_ZONE_MGMT_RCV_LIST_ZSC		= 0x4,
+	NVME_CMD_ZONE_MGMT_RCV_LIST_ZSF		= 0x5,
+	NVME_CMD_ZONE_MGMT_RCV_LIST_ZSRO	= 0x6,
+	NVME_CMD_ZONE_MGMT_RCV_LIST_ZSO		= 0x7,
+};
+
+struct nvme_zone_mgmt_send_command {
+	__u8			opcode;
+	__u8			flags;
+	__u16			command_id;
+	__le32			nsid;
+	__u64			rsvd23[2];
+	union nvme_data_ptr	dptr;
+	__u64			slba;
+	__u8			za;
+	__u8			zflags;
+	__u8			rsvd63[14];
+};
+
+struct nvme_zone_mgmt_rcv_command {
+	__u8			opcode;
+	__u8			flags;
+	__u16			command_id;
+	__le32			nsid;
+	__u64			rsvd23[2];
+	union nvme_data_ptr	dptr;
+	__u64			slba;
+	__u32			nbytes;
+	__u8			za;
+	__u8			zasf;
+	__u8			rsvd63[10];
+};
+
 struct nvme_command {
 	union {
 		struct nvme_common_command common;
@@ -1297,6 +1421,8 @@ struct nvme_command {
 		struct nvmf_property_get_command prop_get;
 		struct nvme_dbbuf dbbuf;
 		struct nvme_directive_cmd directive;
+		struct nvme_zone_mgmt_send_command zmgmt_send;
+		struct nvme_zone_mgmt_rcv_command zmgmt_rcv;
 	};
 };
 
@@ -1367,6 +1493,18 @@ enum {
 	NVME_SC_CAP_EXCEEDED		= 0x81,
 	NVME_SC_NS_NOT_READY		= 0x82,
 	NVME_SC_RESERVATION_CONFLICT	= 0x83,
+
+	/*
+	 * ZNS Specific Status:
+	 */
+	NVME_ZONE_BOUNDARY_ERROR	= 0xb8,
+	NVME_ZONE_IS_FULL		= 0xb9,
+	NVME_ZONE_IS_READ_ONLY		= 0xba,
+	NVME_ZONE_IS_OFFLINE		= 0xbb,
+	NVME_ZONE_INVALID_WRITE		= 0xbc,
+	NVME_ZONE_TOO_MANY_ACTIVE	= 0xbd,
+	NVME_ZONE_TOO_MANY_OPEN		= 0xbe,
+	NVME_ZONE_INVALID_STATE_TRANS	= 0xbf,
 
 	/*
 	 * Command Specific Status:
