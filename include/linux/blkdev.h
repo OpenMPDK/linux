@@ -239,6 +239,10 @@ struct request {
 		u64 fifo_time;
 	};
 
+#ifdef CONFIG_BLK_DEV_ZONED
+	sector_t returned_sector;
+#endif
+
 	/*
 	 * completion callback.
 	 */
@@ -347,6 +351,8 @@ struct queue_limits {
 	unsigned char		discard_misaligned;
 	unsigned char		raid_partial_stripes_expensive;
 	enum blk_zoned_model	zoned;
+	/* max sectors in zone append */
+	unsigned int		max_hw_zone_append_sectors;
 };
 
 typedef int (*report_zones_cb)(struct blk_zone *zone, unsigned int idx,
@@ -683,6 +689,8 @@ static inline bool blk_account_rq(struct request *rq)
 
 #define rq_data_dir(rq)		(op_is_write(req_op(rq)) ? WRITE : READ)
 
+#define rq_is_zone_append(rq)	(req->cmd_flags & REQ_ZONE_APPEND)
+
 #define rq_dma_dir(rq) \
 	(op_is_write(req_op(rq)) ? DMA_TO_DEVICE : DMA_FROM_DEVICE)
 
@@ -874,6 +882,9 @@ extern blk_status_t blk_insert_cloned_request(struct request_queue *q,
 				     struct request *rq);
 extern int blk_rq_append_bio(struct request *rq, struct bio **bio);
 extern void blk_queue_split(struct request_queue *, struct bio **);
+#ifdef CONFIG_BLK_DEV_ZONED
+extern int bio_might_split(struct request_queue *, struct bio *);
+#endif
 extern int scsi_verify_blk_ioctl(struct block_device *, unsigned int);
 extern int scsi_cmd_blk_ioctl(struct block_device *, fmode_t,
 			      unsigned int, void __user *);
@@ -1033,6 +1044,17 @@ static inline unsigned int blk_max_size_offset(struct request_queue *q,
 			(offset & (q->limits.chunk_sectors - 1))));
 }
 
+static inline unsigned int blk_max_size_offset_zone_append(
+							struct request_queue *q,
+							sector_t offset)
+{
+	if (!q->limits.chunk_sectors)
+		return q->limits.max_hw_zone_append_sectors;
+
+	return min(q->limits.max_hw_zone_append_sectors,
+			(unsigned int)(q->limits.chunk_sectors -
+			(offset & (q->limits.chunk_sectors - 1))));
+}
 static inline unsigned int blk_rq_get_max_sectors(struct request *rq,
 						  sector_t offset)
 {
@@ -1082,6 +1104,8 @@ extern void blk_cleanup_queue(struct request_queue *);
 extern void blk_queue_make_request(struct request_queue *, make_request_fn *);
 extern void blk_queue_bounce_limit(struct request_queue *, u64);
 extern void blk_queue_max_hw_sectors(struct request_queue *, unsigned int);
+extern void blk_queue_max_hw_zone_append_sectors(struct request_queue *,
+						unsigned int);
 extern void blk_queue_chunk_sectors(struct request_queue *, unsigned int);
 extern void blk_queue_max_segments(struct request_queue *, unsigned short);
 extern void blk_queue_max_discard_segments(struct request_queue *,
@@ -1295,6 +1319,11 @@ static inline unsigned int queue_max_hw_sectors(const struct request_queue *q)
 static inline unsigned short queue_max_segments(const struct request_queue *q)
 {
 	return q->limits.max_segments;
+}
+
+static inline unsigned int queue_max_hw_zone_append_sectors(struct request_queue *q)
+{
+	return q->limits.max_hw_zone_append_sectors;
 }
 
 static inline unsigned short queue_max_discard_segments(const struct request_queue *q)
