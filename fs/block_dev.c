@@ -185,6 +185,11 @@ static unsigned int dio_bio_write_op(struct kiocb *iocb)
 	/* avoid the need for a I/O completion work item */
 	if (iocb->ki_flags & IOCB_DSYNC)
 		op |= REQ_FUA;
+#ifdef CONFIG_BLK_DEV_ZONED
+	if (iocb->ki_flags & IOCB_ZONE_APPEND) {
+		op |= REQ_ZONE_APPEND | REQ_NOMERGE;
+	}
+#endif
 	return op;
 }
 
@@ -307,15 +312,20 @@ static void blkdev_bio_end_io(struct bio *bio)
 		if (!dio->is_sync) {
 			struct kiocb *iocb = dio->iocb;
 			ssize_t ret;
+			long res = 0;
 
 			if (likely(!dio->bio.bi_status)) {
 				ret = dio->size;
 				iocb->ki_pos += ret;
+#ifdef CONFIG_BLK_DEV_ZONED
+				if (iocb->ki_flags & IOCB_ZONE_APPEND)
+					res = bio->bi_comp_lba << SECTOR_SHIFT;
+#endif
 			} else {
 				ret = blk_status_to_errno(dio->bio.bi_status);
 			}
 
-			dio->iocb->ki_complete(iocb, ret, 0);
+			dio->iocb->ki_complete(iocb, ret, res);
 			if (dio->multi_bio)
 				bio_put(&dio->bio);
 		} else {
