@@ -1464,6 +1464,16 @@ bool blk_update_request(struct request *req, blk_status_t error,
 
 		/* Completion has already been traced */
 		bio_clear_flag(bio, BIO_TRACE_COMPLETION);
+#ifdef CONFIG_BLK_DEV_ZONED
+		if (bio->bi_opf & REQ_ZONE_APPEND) {
+			bio->bi_comp_lba = req->returned_sector;
+			if (bio->bi_next || !(bio->bi_opf & REQ_NOMERGE)) {
+				printk(KERN_ERR "Error: Zone-append I/O \
+				 found to be merged during completion\n");
+				BUG();
+			}
+		}
+#endif
 		req_bio_endio(req, bio, bio_bytes, error);
 
 		total_bytes += bio_bytes;

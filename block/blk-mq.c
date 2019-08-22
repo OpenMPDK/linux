@@ -1967,7 +1967,12 @@ static blk_qc_t blk_mq_make_request(struct request_queue *q, struct bio *bio)
 	struct request *same_queue_rq = NULL;
 	unsigned int nr_segs;
 	blk_qc_t cookie;
-
+#ifdef CONFIG_BLK_DEV_ZONED
+	if (bio->bi_opf & REQ_ZONE_APPEND && bio_might_split(q, bio)) {
+		bio_io_error(bio);
+		return BLK_QC_T_NONE;
+	}
+#endif
 	blk_queue_bounce(q, &bio);
 	__blk_queue_split(q, &bio, &nr_segs);
 
