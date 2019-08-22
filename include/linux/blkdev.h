@@ -239,6 +239,11 @@ struct request {
 		u64 fifo_time;
 	};
 
+	/* completion Values
+	 * only used by zone append for zoned devices
+	*/
+	sector_t returned_sector;
+
 	/*
 	 * completion callback.
 	 */
@@ -666,6 +671,8 @@ static inline bool blk_account_rq(struct request *rq)
 
 #define rq_data_dir(rq)		(op_is_write(req_op(rq)) ? WRITE : READ)
 
+#define rq_is_zone_append(rq)	(req->cmd_flags & REQ_ZONE_APPEND)
+
 #define rq_dma_dir(rq) \
 	(op_is_write(req_op(rq)) ? DMA_TO_DEVICE : DMA_FROM_DEVICE)
 
@@ -857,6 +864,9 @@ extern blk_status_t blk_insert_cloned_request(struct request_queue *q,
 				     struct request *rq);
 extern int blk_rq_append_bio(struct request *rq, struct bio **bio);
 extern void blk_queue_split(struct request_queue *, struct bio **);
+#ifdef CONFIG_BLK_DEV_ZONED
+extern int bio_might_split(struct request_queue *, struct bio *);
+#endif
 extern int scsi_verify_blk_ioctl(struct block_device *, unsigned int);
 extern int scsi_cmd_blk_ioctl(struct block_device *, fmode_t,
 			      unsigned int, void __user *);
