@@ -273,7 +273,15 @@ static struct bio *blk_bio_segment_split(struct request_queue *q,
 	*segs = nsegs;
 	return NULL;
 split:
+#ifdef CONFIG_BLK_DEV_ZONED
+	if (bio->bi_opf & REQ_ZONE_APPEND) {
+		printk(KERN_CRIT "Error: Spliting zone-append,\
+						we should not reach here\n");
+		BUG();
+	}
+#endif
 	*segs = nsegs;
+
 	return bio_split(bio, sectors, GFP_NOIO, bs);
 }
 
@@ -908,3 +916,26 @@ enum elv_merge blk_try_merge(struct request *rq, struct bio *bio)
 		return ELEVATOR_FRONT_MERGE;
 	return ELEVATOR_NO_MERGE;
 }
+#ifdef CONFIG_BLK_DEV_ZONED
+/*
+ * check if a bio might split based on queue limits
+*/
+int bio_might_split(struct request_queue *q, struct bio *bio)
+{
+	sector_t sector = bio->bi_iter.bi_size >> 9;
+	unsigned int nr_seg = bio_segments(bio);
+
+	if (sector > get_max_io_size(q, bio)) {
+		printk(KERN_ERR "Error: I/O size (%llu) greater than \
+			max hw sectors (%u)\n", sector, get_max_io_size(q, bio));
+		return 1;
+	}
+	if (nr_seg > queue_max_segments(q)) {
+		printk(KERN_ERR "Error: I/O has more than max segmments (%u)\n",
+				queue_max_segments(q));
+		return 1;
+	}
+	return 0;
+}
+EXPORT_SYMBOL(bio_might_split);
+#endif

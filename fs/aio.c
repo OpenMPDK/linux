@@ -1546,7 +1546,7 @@ static int aio_read(struct kiocb *req, const struct iocb *iocb,
 }
 
 static int aio_write(struct kiocb *req, const struct iocb *iocb,
-			 bool vectored, bool compat)
+			 bool vectored, bool compat, bool append)
 {
 	struct iovec inline_vecs[UIO_FASTIOV], *iovec = inline_vecs;
 	struct iov_iter iter;
@@ -1579,6 +1579,11 @@ static int aio_write(struct kiocb *req, const struct iocb *iocb,
 			__sb_start_write(file_inode(file)->i_sb, SB_FREEZE_WRITE, true);
 			__sb_writers_release(file_inode(file)->i_sb, SB_FREEZE_WRITE);
 		}
+#ifdef CONFIG_BLK_DEV_ZONED
+		if (append) {
+			req->ki_flags |= IOCB_ZONE_APPEND;
+		}
+#endif
 		req->ki_flags |= IOCB_WRITE;
 		aio_rw_done(req, call_write_iter(file, req, &iter));
 	}
@@ -1812,17 +1817,21 @@ static int __io_submit_one(struct kioctx *ctx, const struct iocb *iocb,
 	case IOCB_CMD_PREAD:
 		return aio_read(&req->rw, iocb, false, compat);
 	case IOCB_CMD_PWRITE:
-		return aio_write(&req->rw, iocb, false, compat);
+		return aio_write(&req->rw, iocb, false, compat, false);
 	case IOCB_CMD_PREADV:
 		return aio_read(&req->rw, iocb, true, compat);
 	case IOCB_CMD_PWRITEV:
-		return aio_write(&req->rw, iocb, true, compat);
+		return aio_write(&req->rw, iocb, true, compat, false);
 	case IOCB_CMD_FSYNC:
 		return aio_fsync(&req->fsync, iocb, false);
 	case IOCB_CMD_FDSYNC:
 		return aio_fsync(&req->fsync, iocb, true);
 	case IOCB_CMD_POLL:
 		return aio_poll(req, iocb);
+#ifdef CONFIG_BLK_DEV_ZONED
+	case IOCB_CMD_ZONE_APPEND:
+		return aio_write(&req->rw, iocb, false, compat, true);
+#endif
 	default:
 		pr_debug("invalid aio operation %d\n", iocb->aio_lio_opcode);
 		return -EINVAL;
