@@ -275,8 +275,8 @@ static struct bio *blk_bio_segment_split(struct request_queue *q,
 split:
 #ifdef CONFIG_BLK_DEV_ZONED
 	if (bio->bi_opf & REQ_ZONE_APPEND) {
-		printk(KERN_CRIT "Error: Spliting zone-append,\
-						we should not reach here\n");
+		printk(KERN_CRIT "Error: Spliting zone-append, "
+						"we should not reach here\n");
 		BUG();
 	}
 #endif
@@ -926,8 +926,8 @@ int bio_might_split(struct request_queue *q, struct bio *bio)
 	unsigned int nr_seg = bio_segments(bio);
 
 	if (sector > get_max_io_size(q, bio)) {
-		printk(KERN_ERR "Error: I/O size (%llu) greater than \
-			max hw sectors (%u)\n", sector, get_max_io_size(q, bio));
+		printk(KERN_ERR "Error: I/O size (%llu) greater than "
+			"max hw sectors (%u)\n", sector, get_max_io_size(q, bio));
 		return 1;
 	}
 	if (nr_seg > queue_max_segments(q)) {

@@ -1468,8 +1468,8 @@ bool blk_update_request(struct request *req, blk_status_t error,
 		if (bio->bi_opf & REQ_ZONE_APPEND) {
 			bio->bi_comp_lba = req->returned_sector;
 			if (bio->bi_next || !(bio->bi_opf & REQ_NOMERGE)) {
-				printk(KERN_ERR "Error: Zone-append I/O \
-				 found to be merged during completion\n");
+				printk(KERN_ERR "Error: Zone-append I/O "
+				 "found to be merged during completion\n");
 				BUG();
 			}
 		}
