@@ -59,6 +59,7 @@ void blk_set_default_limits(struct queue_limits *lim)
 	lim->io_opt = 0;
 	lim->misaligned = 0;
 	lim->zoned = BLK_ZONED_NONE;
+	lim->max_hw_zone_append_sectors = lim->max_hw_sectors;
 }
 EXPORT_SYMBOL(blk_set_default_limits);
 
@@ -83,6 +84,7 @@ void blk_set_stacking_limits(struct queue_limits *lim)
 	lim->max_dev_sectors = UINT_MAX;
 	lim->max_write_same_sectors = UINT_MAX;
 	lim->max_write_zeroes_sectors = UINT_MAX;
+	lim->max_hw_zone_append_sectors = lim->max_hw_sectors;
 }
 EXPORT_SYMBOL(blk_set_stacking_limits);
 
@@ -195,10 +197,30 @@ void blk_queue_max_hw_sectors(struct request_queue *q, unsigned int max_hw_secto
 	max_sectors = min_not_zero(max_hw_sectors, limits->max_dev_sectors);
 	max_sectors = min_t(unsigned int, max_sectors, BLK_DEF_MAX_SECTORS);
 	limits->max_sectors = max_sectors;
+	limits->max_hw_zone_append_sectors = limits->max_hw_sectors,
 	q->backing_dev_info->io_pages = max_sectors >> (PAGE_SHIFT - 9);
 }
 EXPORT_SYMBOL(blk_queue_max_hw_sectors);
 
+void blk_queue_max_hw_zone_append_sectors(struct request_queue *q,
+				unsigned int max_hw_zone_append_sectors)
+{
+	struct queue_limits *limits = &q->limits;
+
+	if ((max_hw_zone_append_sectors << 9) < PAGE_SIZE) {
+		max_hw_zone_append_sectors = 1 << (PAGE_SHIFT - 9);
+		pr_info("%s: set to minimum %d\n",
+		       __func__, max_hw_zone_append_sectors);
+	}
+	if (max_hw_zone_append_sectors > limits->max_hw_sectors) {
+		max_hw_zone_append_sectors = limits->max_hw_sectors;
+		pr_info("%s: reduced to max hw sectors %d\n",
+		       __func__, max_hw_zone_append_sectors);
+	}
+
+	limits->max_hw_zone_append_sectors = max_hw_zone_append_sectors;
+}
+EXPORT_SYMBOL(blk_queue_max_hw_zone_append_sectors);
 /**
  * blk_queue_chunk_sectors - set size of the chunk for this queue
  * @q:  the request queue for the device
@@ -501,6 +523,9 @@ int blk_stack_limits(struct queue_limits *t, struct queue_limits *b,
 
 	t->max_sectors = min_not_zero(t->max_sectors, b->max_sectors);
 	t->max_hw_sectors = min_not_zero(t->max_hw_sectors, b->max_hw_sectors);
+	t->max_hw_zone_append_sectors =
+			min_not_zero(t->max_hw_zone_append_sectors,
+					b->max_hw_zone_append_sectors);
 	t->max_dev_sectors = min_not_zero(t->max_dev_sectors, b->max_dev_sectors);
 	t->max_write_same_sectors = min(t->max_write_same_sectors,
 					b->max_write_same_sectors);
