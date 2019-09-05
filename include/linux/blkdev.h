@@ -352,6 +352,8 @@ struct queue_limits {
 	unsigned char		discard_misaligned;
 	unsigned char		raid_partial_stripes_expensive;
 	enum blk_zoned_model	zoned;
+	/* max sectors in zone append */
+	unsigned int		max_hw_zone_append_sectors;
 };
 
 typedef int (*report_zones_cb)(struct blk_zone *zone, unsigned int idx,
@@ -1026,6 +1028,17 @@ static inline unsigned int blk_max_size_offset(struct request_queue *q,
 			(offset & (q->limits.chunk_sectors - 1))));
 }
 
+static inline unsigned int blk_max_size_offset_zone_append(
+							struct request_queue *q,
+							sector_t offset)
+{
+	if (!q->limits.chunk_sectors)
+		return q->limits.max_hw_zone_append_sectors;
+
+	return min(q->limits.max_hw_zone_append_sectors,
+			(unsigned int)(q->limits.chunk_sectors -
+			(offset & (q->limits.chunk_sectors - 1))));
+}
 static inline unsigned int blk_rq_get_max_sectors(struct request *rq,
 						  sector_t offset)
 {
@@ -1075,6 +1088,8 @@ extern void blk_cleanup_queue(struct request_queue *);
 extern void blk_queue_make_request(struct request_queue *, make_request_fn *);
 extern void blk_queue_bounce_limit(struct request_queue *, u64);
 extern void blk_queue_max_hw_sectors(struct request_queue *, unsigned int);
+extern void blk_queue_max_hw_zone_append_sectors(struct request_queue *,
+						unsigned int);
 extern void blk_queue_chunk_sectors(struct request_queue *, unsigned int);
 extern void blk_queue_max_segments(struct request_queue *, unsigned short);
 extern void blk_queue_max_discard_segments(struct request_queue *,
@@ -1288,6 +1303,11 @@ static inline unsigned int queue_max_hw_sectors(const struct request_queue *q)
 static inline unsigned short queue_max_segments(const struct request_queue *q)
 {
 	return q->limits.max_segments;
+}
+
+static inline unsigned int queue_max_hw_zone_append_sectors(struct request_queue *q)
+{
+	return q->limits.max_hw_zone_append_sectors;
 }
 
 static inline unsigned short queue_max_discard_segments(const struct request_queue *q)
