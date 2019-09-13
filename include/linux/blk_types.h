@@ -339,6 +339,8 @@ enum req_opf {
 	REQ_OP_ZONE_FINISH	= 12,
 	/* write data at the current zone write pointer */
 	REQ_OP_ZONE_APPEND	= 13,
+	/* Transition a zone to offline */
+	REQ_OP_ZONE_OFFLINE	= 14,
 	/* reset a zone write pointer */
 	REQ_OP_ZONE_RESET	= 15,
 	/* reset all the zone present on the device */
@@ -482,6 +484,7 @@ static inline bool op_is_zone_mgmt(enum req_opf op)
 	case REQ_OP_ZONE_OPEN:
 	case REQ_OP_ZONE_CLOSE:
 	case REQ_OP_ZONE_FINISH:
+	case REQ_OP_ZONE_OFFLINE:
 		return true;
 	default:
 		return false;
