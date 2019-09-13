@@ -155,5 +155,6 @@ struct blk_zone_range {
 #define BLKOPENZONE	_IOW(0x12, 134, struct blk_zone_range)
 #define BLKCLOSEZONE	_IOW(0x12, 135, struct blk_zone_range)
 #define BLKFINISHZONE	_IOW(0x12, 136, struct blk_zone_range)
+#define BLKOFFLINEZONE	_IOW(0x12, 137, struct blk_zone_range)
 
 #endif /* _UAPI_BLKZONED_H */
