@@ -272,7 +272,8 @@ int blkdev_report_zones_ioctl(struct block_device *bdev, fmode_t mode,
 }
 
 /*
- * BLKRESETZONE, BLKOPENZONE, BLKCLOSEZONE and BLKFINISHZONE ioctl processing.
+ * BLKRESETZONE, BLKOPENZONE, BLKCLOSEZONE, BLKFINISHZONE and BLKOFFLINEZONE
+ * ioctl processing.
  * Called from blkdev_ioctl.
  */
 int blkdev_zone_mgmt_ioctl(struct block_device *bdev, fmode_t mode,
@@ -314,6 +315,9 @@ int blkdev_zone_mgmt_ioctl(struct block_device *bdev, fmode_t mode,
 		break;
 	case BLKFINISHZONE:
 		op = REQ_OP_ZONE_FINISH;
+		break;
+	case BLKOFFLINEZONE:
+		op = REQ_OP_ZONE_OFFLINE;
 		break;
 	default:
 		return -ENOTTY;
