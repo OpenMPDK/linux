@@ -296,6 +296,8 @@ enum req_opf {
 	REQ_OP_ZONE_CLOSE	= 11,
 	/* Transition a zone to full */
 	REQ_OP_ZONE_FINISH	= 12,
+	/* Transition a zone to offline */
+	REQ_OP_ZONE_OFFLINE	= 13,
 
 	/* SCSI passthrough using struct scsi_request */
 	REQ_OP_SCSI_IN		= 32,
@@ -437,6 +439,7 @@ static inline bool op_is_zone_mgmt(enum req_opf op)
 	case REQ_OP_ZONE_OPEN:
 	case REQ_OP_ZONE_CLOSE:
 	case REQ_OP_ZONE_FINISH:
+	case REQ_OP_ZONE_OFFLINE:
 		return true;
 	default:
 		return false;
