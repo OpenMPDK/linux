@@ -1787,6 +1787,8 @@ static int null_add_dev(struct nullb_device *dev)
 	blk_queue_logical_block_size(nullb->q, dev->blocksize);
 	blk_queue_physical_block_size(nullb->q, dev->blocksize);
 	blk_queue_max_hw_sectors(nullb->q, g_max_sectors);
+	blk_queue_max_segments(nullb->q,
+			g_max_sectors / (PAGE_SIZE >> SECTOR_SHIFT));
 
 	null_config_discard(nullb);
 
