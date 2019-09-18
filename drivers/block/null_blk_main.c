@@ -156,6 +156,10 @@ static unsigned int nr_devices = 1;
 module_param(nr_devices, uint, 0444);
 MODULE_PARM_DESC(nr_devices, "Number of devices to register");
 
+static int g_max_sectors = 1024;
+module_param_named(max_sectors, g_max_sectors, int, 0444);
+MODULE_PARM_DESC(max_sectors, "Max Hardware sector size in 512b");
+
 static bool g_blocking;
 module_param_named(blocking, g_blocking, bool, 0444);
 MODULE_PARM_DESC(blocking, "Register as a blocking blk-mq driver device");
@@ -629,6 +633,7 @@ static struct nullb_cmd *__alloc_cmd(struct nullb_queue *nq)
 				     HRTIMER_MODE_REL);
 			cmd->timer.function = null_cmd_timer_expired;
 		}
+		cmd->error = 0;
 		return cmd;
 	}
 
@@ -1127,7 +1132,10 @@ static int null_handle_rq(struct nullb_cmd *cmd)
 	struct req_iterator iter;
 	struct bio_vec bvec;
 
-	sector = blk_rq_pos(rq);
+	if (op_is_write(req_op(rq)) && (rq->cmd_flags & REQ_ZONE_APPEND))
+		sector = cmd->comp_lba;
+	else
+		sector = blk_rq_pos(rq);
 
 	if (req_op(rq) == REQ_OP_DISCARD) {
 		null_handle_discard(nullb, sector, blk_rq_bytes(rq));
@@ -1160,8 +1168,10 @@ static int null_handle_bio(struct nullb_cmd *cmd)
 	sector_t sector;
 	struct bio_vec bvec;
 	struct bvec_iter iter;
-
-	sector = bio->bi_iter.bi_sector;
+	if (op_is_write(bio_op(bio)) && (cmd->bio->bi_opf & REQ_ZONE_APPEND))
+		sector = cmd->comp_lba;
+	else
+		sector = bio->bi_iter.bi_sector;
 
 	if (bio_op(bio) == REQ_OP_DISCARD) {
 		null_handle_discard(nullb, sector,
@@ -1247,6 +1257,9 @@ static inline blk_status_t null_handle_memory_backed(struct nullb_cmd *cmd,
 	else
 		err = null_handle_rq(cmd);
 
+	if (err && (cmd->flags & REQ_ZONE_APPEND))
+		pr_err("Error in copying Data err(%d). Reset Zone\n", err);
+
 	return errno_to_blk_status(err);
 }
 
@@ -1289,7 +1302,7 @@ blk_status_t null_process_cmd(struct nullb_cmd *cmd,
 			return ret;
 	}
 
-	if (dev->memory_backed)
+	if (!cmd->error && dev->memory_backed)
 		return null_handle_memory_backed(cmd, op);
 
 	return BLK_STS_OK;
@@ -1319,6 +1332,8 @@ static blk_status_t null_handle_cmd(struct nullb_cmd *cmd, sector_t sector,
 	else
 		cmd->error = null_process_cmd(cmd, op, sector, nr_sectors);
 
+	if (!cmd->error && dev->memory_backed)
+		cmd->error = null_handle_memory_backed(cmd, op);
 out:
 	nullb_complete_cmd(cmd);
 	return BLK_STS_OK;
@@ -1371,8 +1386,12 @@ static blk_qc_t null_queue_bio(struct request_queue *q, struct bio *bio)
 
 	cmd = alloc_cmd(nq, 1);
 	cmd->bio = bio;
+	cmd->flags = bio->bi_opf;
 
 	null_handle_cmd(cmd, sector, nr_sectors, bio_op(bio));
+
+	if (bio->bi_opf & REQ_ZONE_APPEND)
+		bio->bi_comp_lba = cmd->comp_lba;
 	return BLK_QC_T_NONE;
 }
 
@@ -1408,7 +1427,7 @@ static blk_status_t null_queue_rq(struct blk_mq_hw_ctx *hctx,
 	struct nullb_queue *nq = hctx->driver_data;
 	sector_t nr_sectors = blk_rq_sectors(bd->rq);
 	sector_t sector = blk_rq_pos(bd->rq);
-
+	blk_status_t ret;
 	might_sleep_if(hctx->flags & BLK_MQ_F_BLOCKING);
 
 	if (nq->dev->irqmode == NULL_IRQ_TIMER) {
@@ -1418,6 +1437,7 @@ static blk_status_t null_queue_rq(struct blk_mq_hw_ctx *hctx,
 	cmd->rq = bd->rq;
 	cmd->error = BLK_STS_OK;
 	cmd->nq = nq;
+	cmd->flags = bd->rq->cmd_flags;
 
 	blk_mq_start_request(bd->rq);
 
@@ -1437,7 +1457,11 @@ static blk_status_t null_queue_rq(struct blk_mq_hw_ctx *hctx,
 	if (should_timeout_request(bd->rq))
 		return BLK_STS_OK;
 
-	return null_handle_cmd(cmd, sector, nr_sectors, req_op(bd->rq));
+	ret = null_handle_cmd(cmd, sector, nr_sectors, req_op(bd->rq));
+
+	if (bd->rq->cmd_flags & REQ_ZONE_APPEND)
+		bd->rq->returned_sector = cmd->comp_lba;
+	return ret;
 }
 
 static void cleanup_queue(struct nullb_queue *nq)
@@ -1795,6 +1819,7 @@ static int null_add_dev(struct nullb_device *dev)
 
 	blk_queue_logical_block_size(nullb->q, dev->blocksize);
 	blk_queue_physical_block_size(nullb->q, dev->blocksize);
+	blk_queue_max_hw_sectors(nullb->q, g_max_sectors);
 
 	null_config_discard(nullb);
 
