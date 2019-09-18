@@ -23,6 +23,8 @@ struct nullb_cmd {
 	blk_status_t error;
 	struct nullb_queue *nq;
 	struct hrtimer timer;
+	unsigned int flags;
+	sector_t comp_lba;
 };
 
 struct nullb_queue {
@@ -47,6 +49,7 @@ struct nullb_device {
 	unsigned int nr_zones;
 	struct blk_zone *zones;
 	sector_t zone_size_sects;
+	spinlock_t *zlocks; /* spinlock for each zone */
 
 	unsigned long size; /* device size in MB */
 	unsigned long completion_nsec; /* time in ns to complete a request */
