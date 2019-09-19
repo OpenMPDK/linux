@@ -1974,11 +1974,7 @@ static blk_qc_t blk_mq_make_request(struct request_queue *q, struct bio *bio)
 	}
 #endif
 	blk_queue_bounce(q, &bio);
-#ifdef CONFIG_BLK_DEV_ZONED
-	/* Skip spliting for zone append, we already checked */
-	if (!(bio->bi_opf & REQ_ZONE_APPEND))
-#endif
-		__blk_queue_split(q, &bio, &nr_segs);
+	__blk_queue_split(q, &bio, &nr_segs);
 
 	if (!bio_integrity_prep(bio))
 		return BLK_QC_T_NONE;
