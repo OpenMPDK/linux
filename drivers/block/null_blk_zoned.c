@@ -107,6 +107,8 @@ static blk_status_t null_zone_append(struct nullb_cmd *cmd, sector_t sector,
 		cmd->error = BLK_STS_IOERR;
 		return BLK_STS_IOERR;
 	case BLK_ZONE_COND_EMPTY:
+	case BLK_ZONE_COND_CLOSED:
+	case BLK_ZONE_COND_EXP_OPEN:
 	case BLK_ZONE_COND_IMP_OPEN:
 		/* Append should not cross zone boundary */
 		spin_lock(&dev->zlocks[zno - dev->zone_nr_conv]);
@@ -116,6 +118,8 @@ static blk_status_t null_zone_append(struct nullb_cmd *cmd, sector_t sector,
 		}
 
 		if (zone->cond == BLK_ZONE_COND_EMPTY)
+			zone->cond = BLK_ZONE_COND_IMP_OPEN;
+		if (zone->cond == BLK_ZONE_COND_CLOSED)
 			zone->cond = BLK_ZONE_COND_IMP_OPEN;
 
 		cmd->comp_lba = zone->wp;
@@ -145,6 +149,8 @@ static blk_status_t null_zone_write(struct nullb_cmd *cmd, sector_t sector,
 		cmd->error = BLK_STS_IOERR;
 		return BLK_STS_IOERR;
 	case BLK_ZONE_COND_EMPTY:
+	case BLK_ZONE_COND_CLOSED:
+	case BLK_ZONE_COND_EXP_OPEN:
 	case BLK_ZONE_COND_IMP_OPEN:
 		/* Writes must be at the write pointer position
 		 * and writes should not cross zone boundary
@@ -157,6 +163,8 @@ static blk_status_t null_zone_write(struct nullb_cmd *cmd, sector_t sector,
 		}
 
 		if (zone->cond == BLK_ZONE_COND_EMPTY)
+			zone->cond = BLK_ZONE_COND_IMP_OPEN;
+		if (zone->cond == BLK_ZONE_COND_CLOSED)
 			zone->cond = BLK_ZONE_COND_IMP_OPEN;
 
 		zone->wp += nr_sectors;
@@ -210,6 +218,57 @@ static blk_status_t null_zone_reset(struct nullb_cmd *cmd, sector_t sector)
 	return BLK_STS_OK;
 }
 
+static blk_status_t null_zone_trans_state(struct nullb_cmd *cmd,
+				sector_t sector, enum req_opf op)
+{
+	struct nullb_device *dev = cmd->nq->dev;
+	unsigned int zno = null_zone_no(dev, sector);
+	struct blk_zone *zone = &dev->zones[zno];
+	blk_status_t ret = BLK_STS_OK;
+
+	switch (zone->cond) {
+	case BLK_ZONE_COND_FULL:
+	case BLK_ZONE_COND_NOT_WP:
+	case BLK_ZONE_COND_READONLY:
+	case BLK_ZONE_COND_OFFLINE:
+		cmd->error = BLK_STS_IOERR;
+		return BLK_STS_IOERR;
+	case BLK_ZONE_COND_EMPTY:
+		if (op == REQ_OP_ZONE_OPEN)
+			zone->cond = BLK_ZONE_COND_EXP_OPEN;
+		else if (op == REQ_OP_ZONE_FINISH)
+			zone->cond = BLK_ZONE_COND_FULL;
+		else {
+			cmd->error = BLK_STS_IOERR;
+			ret = BLK_STS_IOERR;
+		}
+		break;
+	case BLK_ZONE_COND_IMP_OPEN:
+		if (op == REQ_OP_ZONE_OPEN)
+			zone->cond = BLK_ZONE_COND_EXP_OPEN;
+		if (op == REQ_OP_ZONE_CLOSE)
+			zone->cond = BLK_ZONE_COND_CLOSED;
+		if (op == REQ_OP_ZONE_FINISH)
+			zone->cond = BLK_ZONE_COND_FULL;
+		break;
+	case BLK_ZONE_COND_EXP_OPEN:
+		if (op == REQ_OP_ZONE_CLOSE)
+			zone->cond = BLK_ZONE_COND_CLOSED;
+		if (op == REQ_OP_ZONE_FINISH)
+			zone->cond = BLK_ZONE_COND_FULL;
+		break;
+	case BLK_ZONE_COND_CLOSED:
+		if (op == REQ_OP_ZONE_OPEN)
+			zone->cond = BLK_ZONE_COND_EXP_OPEN;
+		if (op == REQ_OP_ZONE_FINISH)
+			zone->cond = BLK_ZONE_COND_FULL;
+		break;
+	default:
+		cmd->error = BLK_STS_NOTSUPP;
+		break;
+	}
+	return ret;
+}
 blk_status_t null_handle_zoned(struct nullb_cmd *cmd, enum req_opf op,
 			       sector_t sector, sector_t nr_sectors)
 {
@@ -222,6 +281,10 @@ blk_status_t null_handle_zoned(struct nullb_cmd *cmd, enum req_opf op,
 	case REQ_OP_ZONE_RESET:
 	case REQ_OP_ZONE_RESET_ALL:
 		return null_zone_reset(cmd, sector);
+	case REQ_OP_ZONE_CLOSE:
+	case REQ_OP_ZONE_FINISH:
+	case REQ_OP_ZONE_OPEN:
+		return null_zone_trans_state(cmd, sector, op);
 	default:
 		return BLK_STS_OK;
 	}
