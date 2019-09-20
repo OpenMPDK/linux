@@ -138,6 +138,8 @@ static blk_status_t null_zone_append(struct nullb_cmd *cmd, sector_t sector,
 		cmd->error = BLK_STS_IOERR;
 		return BLK_STS_IOERR;
 	case BLK_ZONE_COND_EMPTY:
+	case BLK_ZONE_COND_CLOSED:
+	case BLK_ZONE_COND_EXP_OPEN:
 	case BLK_ZONE_COND_IMP_OPEN:
 		/* Append should not cross zone boundary */
 		spin_lock(&dev->zlocks[zno - dev->zone_nr_conv]);
@@ -147,6 +149,8 @@ static blk_status_t null_zone_append(struct nullb_cmd *cmd, sector_t sector,
 		}
 
 		if (zone->cond == BLK_ZONE_COND_EMPTY)
+			zone->cond = BLK_ZONE_COND_IMP_OPEN;
+		if (zone->cond == BLK_ZONE_COND_CLOSED)
 			zone->cond = BLK_ZONE_COND_IMP_OPEN;
 
 		cmd->comp_lba = zone->wp;
@@ -184,6 +188,8 @@ static blk_status_t null_zone_write(struct nullb_cmd *cmd, sector_t sector,
 			return BLK_STS_IOERR;
 
 		if (zone->cond != BLK_ZONE_COND_EXP_OPEN)
+			zone->cond = BLK_ZONE_COND_IMP_OPEN;
+		if (zone->cond == BLK_ZONE_COND_CLOSED)
 			zone->cond = BLK_ZONE_COND_IMP_OPEN;
 
 		zone->wp += nr_sectors;
