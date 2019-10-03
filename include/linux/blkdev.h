@@ -720,7 +720,7 @@ static inline unsigned int blk_queue_zone_no(struct request_queue *q,
 {
 	if (!blk_queue_is_zoned(q))
 		return 0;
-	return sector >> ilog2(q->limits.chunk_sectors);
+	return sector / (q->limits.chunk_sectors);
 }
 
 static inline bool blk_queue_zone_is_seq(struct request_queue *q,
