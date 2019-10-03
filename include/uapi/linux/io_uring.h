@@ -62,7 +62,9 @@ struct io_uring_sqe {
 #define IORING_OP_SYNC_FILE_RANGE	8
 #define IORING_OP_SENDMSG	9
 #define IORING_OP_RECVMSG	10
-#define IORING_OP_TIMEOUT	11
+#define IORING_OP_TIMEOUT	12
+#define IORING_OP_ZONE_APPEND	13
+#define IORING_OP_ZONE_APPEND_FIXED	14
 
 /*
  * sqe->fsync_flags
@@ -75,6 +77,7 @@ struct io_uring_sqe {
 struct io_uring_cqe {
 	__u64	user_data;	/* sqe->data submission passed back */
 	__s32	res;		/* result code for this event */
+	__u64	res2;		/* zone lba retun for this event */
 	__u32	flags;
 };
 

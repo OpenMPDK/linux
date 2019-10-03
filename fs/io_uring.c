@@ -358,7 +358,7 @@ struct io_submit_state {
 
 static void io_sq_wq_submit_work(struct work_struct *work);
 static void io_cqring_fill_event(struct io_ring_ctx *ctx, u64 ki_user_data,
-				 long res);
+				 long res, long res2);
 static void __io_free_req(struct io_kiocb *req);
 
 static struct kmem_cache *req_cachep;
@@ -501,7 +501,7 @@ static void io_kill_timeout(struct io_kiocb *req)
 	if (ret != -1) {
 		atomic_inc(&req->ctx->cq_timeouts);
 		list_del(&req->list);
-		io_cqring_fill_event(req->ctx, req->user_data, 0);
+		io_cqring_fill_event(req->ctx, req->user_data, 0, 0);
 		__io_free_req(req);
 	}
 }
@@ -555,7 +555,7 @@ static struct io_uring_cqe *io_get_cqring(struct io_ring_ctx *ctx)
 }
 
 static void io_cqring_fill_event(struct io_ring_ctx *ctx, u64 ki_user_data,
-				 long res)
+				 long res, long res2)
 {
 	struct io_uring_cqe *cqe;
 
@@ -569,6 +569,7 @@ static void io_cqring_fill_event(struct io_ring_ctx *ctx, u64 ki_user_data,
 		WRITE_ONCE(cqe->user_data, ki_user_data);
 		WRITE_ONCE(cqe->res, res);
 		WRITE_ONCE(cqe->flags, 0);
+		WRITE_ONCE(cqe->res2, res2);
 	} else {
 		WRITE_ONCE(ctx->rings->cq_overflow,
 				atomic_inc_return(&ctx->cached_cq_overflow));
@@ -586,12 +587,12 @@ static void io_cqring_ev_posted(struct io_ring_ctx *ctx)
 }
 
 static void io_cqring_add_event(struct io_ring_ctx *ctx, u64 user_data,
-				long res)
+				long res, long res2)
 {
 	unsigned long flags;
 
 	spin_lock_irqsave(&ctx->completion_lock, flags);
-	io_cqring_fill_event(ctx, user_data, res);
+	io_cqring_fill_event(ctx, user_data, res, res2);
 	io_commit_cqring(ctx);
 	spin_unlock_irqrestore(&ctx->completion_lock, flags);
 
@@ -701,7 +702,7 @@ static void io_fail_links(struct io_kiocb *req)
 		link = list_first_entry(&req->link_list, struct io_kiocb, list);
 		list_del(&link->list);
 
-		io_cqring_add_event(req->ctx, link->user_data, -ECANCELED);
+		io_cqring_add_event(req->ctx, link->user_data, -ECANCELED, 0);
 		__io_free_req(link);
 	}
 }
@@ -760,7 +761,7 @@ static void io_iopoll_complete(struct io_ring_ctx *ctx, unsigned int *nr_events,
 		req = list_first_entry(done, struct io_kiocb, list);
 		list_del(&req->list);
 
-		io_cqring_fill_event(ctx, req->user_data, req->result);
+		io_cqring_fill_event(ctx, req->user_data, req->result, 0);
 		(*nr_events)++;
 
 		if (refcount_dec_and_test(&req->refs)) {
@@ -956,7 +957,7 @@ static void io_complete_rw(struct kiocb *kiocb, long res, long res2)
 
 	if ((req->flags & REQ_F_LINK) && res != req->result)
 		req->flags |= REQ_F_FAIL_LINK;
-	io_cqring_add_event(req->ctx, req->user_data, res);
+	io_cqring_add_event(req->ctx, req->user_data, res, res2);
 	io_put_req(req);
 }
 
@@ -1247,6 +1248,7 @@ static ssize_t io_import_iovec(struct io_ring_ctx *ctx, int rw,
 	 */
 	opcode = READ_ONCE(sqe->opcode);
 	if (opcode == IORING_OP_READ_FIXED ||
+	    opcode == IORING_OP_ZONE_APPEND_FIXED ||
 	    opcode == IORING_OP_WRITE_FIXED) {
 		ssize_t ret = io_import_fixed(ctx, rw, sqe, iter);
 		*iovec = NULL;
@@ -1486,6 +1488,14 @@ static int io_write(struct io_kiocb *req, const struct sqe_submit *s,
 			__sb_writers_release(file_inode(file)->i_sb,
 						SB_FREEZE_WRITE);
 		}
+
+#ifdef CONFIG_BLK_DEV_ZONED
+		if ((READ_ONCE(s->sqe->opcode) == IORING_OP_ZONE_APPEND) ||
+			(READ_ONCE(s->sqe->opcode) ==
+				IORING_OP_ZONE_APPEND_FIXED)) {
+			kiocb->ki_flags |= IOCB_ZONE_APPEND;
+		}
+#endif
 		kiocb->ki_flags |= IOCB_WRITE;
 
 		if (file->f_op->write_iter)
@@ -1520,7 +1530,7 @@ static int io_nop(struct io_kiocb *req, u64 user_data)
 	if (unlikely(ctx->flags & IORING_SETUP_IOPOLL))
 		return -EINVAL;
 
-	io_cqring_add_event(ctx, user_data, err);
+	io_cqring_add_event(ctx, user_data, err, 0);
 	io_put_req(req);
 	return 0;
 }
@@ -1567,7 +1577,7 @@ static int io_fsync(struct io_kiocb *req, const struct io_uring_sqe *sqe,
 
 	if (ret < 0 && (req->flags & REQ_F_LINK))
 		req->flags |= REQ_F_FAIL_LINK;
-	io_cqring_add_event(req->ctx, sqe->user_data, ret);
+	io_cqring_add_event(req->ctx, sqe->user_data, ret, 0);
 	io_put_req(req);
 	return 0;
 }
@@ -1613,7 +1623,7 @@ static int io_sync_file_range(struct io_kiocb *req,
 
 	if (ret < 0 && (req->flags & REQ_F_LINK))
 		req->flags |= REQ_F_FAIL_LINK;
-	io_cqring_add_event(req->ctx, sqe->user_data, ret);
+	io_cqring_add_event(req->ctx, sqe->user_data, ret, 0);
 	io_put_req(req);
 	return 0;
 }
@@ -1649,7 +1659,7 @@ static int io_send_recvmsg(struct io_kiocb *req, const struct io_uring_sqe *sqe,
 			return ret;
 	}
 
-	io_cqring_add_event(req->ctx, sqe->user_data, ret);
+	io_cqring_add_event(req->ctx, sqe->user_data, ret, 0);
 	io_put_req(req);
 	return 0;
 }
@@ -1728,7 +1738,7 @@ static int io_poll_remove(struct io_kiocb *req, const struct io_uring_sqe *sqe)
 	}
 	spin_unlock_irq(&ctx->completion_lock);
 
-	io_cqring_add_event(req->ctx, sqe->user_data, ret);
+	io_cqring_add_event(req->ctx, sqe->user_data, ret, 0);
 	io_put_req(req);
 	return 0;
 }
@@ -1737,7 +1747,7 @@ static void io_poll_complete(struct io_ring_ctx *ctx, struct io_kiocb *req,
 			     __poll_t mask)
 {
 	req->poll.done = true;
-	io_cqring_fill_event(ctx, req->user_data, mangle_poll(mask));
+	io_cqring_fill_event(ctx, req->user_data, mangle_poll(mask), 0);
 	io_commit_cqring(ctx);
 }
 
@@ -1914,7 +1924,7 @@ static enum hrtimer_restart io_timeout_fn(struct hrtimer *timer)
 		prev->sequence++;
 	list_del(&req->list);
 
-	io_cqring_fill_event(ctx, req->user_data, -ETIME);
+	io_cqring_fill_event(ctx, req->user_data, -ETIME, 0);
 	io_commit_cqring(ctx);
 	spin_unlock_irqrestore(&ctx->completion_lock, flags);
 
@@ -2080,6 +2090,14 @@ static int __io_submit_sqe(struct io_ring_ctx *ctx, struct io_kiocb *req,
 	case IORING_OP_TIMEOUT:
 		ret = io_timeout(req, s->sqe);
 		break;
+#ifdef CONFIG_BLK_DEV_ZONED
+	case IORING_OP_ZONE_APPEND:
+		ret = io_write(req, s, force_nonblock);
+		break;
+	case IORING_OP_ZONE_APPEND_FIXED:
+		ret = io_write(req, s, force_nonblock);
+		break;
+#endif
 	default:
 		ret = -EINVAL;
 		break;
@@ -2112,6 +2130,8 @@ static struct async_list *io_async_list_from_sqe(struct io_ring_ctx *ctx,
 		return &ctx->pending_async[READ];
 	case IORING_OP_WRITEV:
 	case IORING_OP_WRITE_FIXED:
+	case IORING_OP_ZONE_APPEND:
+	case IORING_OP_ZONE_APPEND_FIXED:
 		return &ctx->pending_async[WRITE];
 	default:
 		return NULL;
@@ -2123,6 +2143,7 @@ static inline bool io_sqe_needs_user(const struct io_uring_sqe *sqe)
 	u8 opcode = READ_ONCE(sqe->opcode);
 
 	return !(opcode == IORING_OP_READ_FIXED ||
+		 opcode == IORING_OP_ZONE_APPEND_FIXED ||
 		 opcode == IORING_OP_WRITE_FIXED);
 }
 
@@ -2179,7 +2200,7 @@ restart:
 		io_put_req(req);
 
 		if (ret) {
-			io_cqring_add_event(ctx, sqe->user_data, ret);
+			io_cqring_add_event(ctx, sqe->user_data, ret, 0);
 			io_put_req(req);
 		}
 
@@ -2369,7 +2390,7 @@ static int __io_queue_sqe(struct io_ring_ctx *ctx, struct io_kiocb *req,
 
 	/* and drop final reference, if we failed */
 	if (ret) {
-		io_cqring_add_event(ctx, req->user_data, ret);
+		io_cqring_add_event(ctx, req->user_data, ret, 0);
 		if (req->flags & REQ_F_LINK)
 			req->flags |= REQ_F_FAIL_LINK;
 		io_put_req(req);
@@ -2387,7 +2408,7 @@ static int io_queue_sqe(struct io_ring_ctx *ctx, struct io_kiocb *req,
 	if (ret) {
 		if (ret != -EIOCBQUEUED) {
 			io_free_req(req);
-			io_cqring_add_event(ctx, s->sqe->user_data, ret);
+			io_cqring_add_event(ctx, s->sqe->user_data, ret, 0);
 		}
 		return 0;
 	}
@@ -2415,7 +2436,7 @@ static int io_queue_link_head(struct io_ring_ctx *ctx, struct io_kiocb *req,
 		if (ret != -EIOCBQUEUED) {
 			io_free_req(req);
 			__io_free_req(shadow);
-			io_cqring_add_event(ctx, s->sqe->user_data, ret);
+			io_cqring_add_event(ctx, s->sqe->user_data, ret, 0);
 			return 0;
 		}
 	} else {
@@ -2463,7 +2484,7 @@ static void io_submit_sqe(struct io_ring_ctx *ctx, struct sqe_submit *s,
 err_req:
 		io_free_req(req);
 err:
-		io_cqring_add_event(ctx, s->sqe->user_data, ret);
+		io_cqring_add_event(ctx, s->sqe->user_data, ret, 0);
 		return;
 	}
 
@@ -2624,8 +2645,7 @@ static int io_submit_sqes(struct io_ring_ctx *ctx, unsigned int nr,
 
 out:
 		if (unlikely(mm_fault)) {
-			io_cqring_add_event(ctx, s.sqe->user_data,
-						-EFAULT);
+			io_cqring_add_event(ctx, s.sqe->user_data, -EFAULT, 0);
 		} else {
 			s.has_user = has_user;
 			s.needs_lock = true;
