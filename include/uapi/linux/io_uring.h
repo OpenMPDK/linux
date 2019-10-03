@@ -76,6 +76,8 @@ enum {
 	IORING_OP_ASYNC_CANCEL,
 	IORING_OP_LINK_TIMEOUT,
 	IORING_OP_CONNECT,
+	IORING_OP_ZONE_APPEND,
+	IORING_OP_ZONE_APPEND_FIXED,
 
 	/* this goes last, obviously */
 	IORING_OP_LAST,
@@ -97,6 +99,7 @@ enum {
 struct io_uring_cqe {
 	__u64	user_data;	/* sqe->data submission passed back */
 	__s32	res;		/* result code for this event */
+	__u64	res2;		/* zone lba retun for this event */
 	__u32	flags;
 };
 
