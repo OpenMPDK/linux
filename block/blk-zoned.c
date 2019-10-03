@@ -23,9 +23,9 @@
 static inline sector_t blk_zone_start(struct request_queue *q,
 				      sector_t sector)
 {
-	sector_t zone_mask = blk_queue_zone_sectors(q) - 1;
+	sector_t zone_size = blk_queue_zone_sectors(q);
 
-	return sector & ~zone_mask;
+	return ((sector / zone_size) * zone_size);
 }
 
 /*
@@ -88,7 +88,7 @@ unsigned int blkdev_nr_zones(struct gendisk *disk)
 
 	if (!blk_queue_is_zoned(disk->queue))
 		return 0;
-	return (get_capacity(disk) + zone_sectors - 1) >> ilog2(zone_sectors);
+	return (get_capacity(disk) + zone_sectors - 1) / zone_sectors;
 }
 EXPORT_SYMBOL_GPL(blkdev_nr_zones);
 
@@ -132,6 +132,7 @@ static inline bool blkdev_allow_reset_all_zones(struct block_device *bdev,
 						sector_t sector,
 						sector_t nr_sectors)
 {
+
 	if (!blk_queue_zone_resetall(bdev_get_queue(bdev)))
 		return false;
 
@@ -183,11 +184,12 @@ int blkdev_zone_mgmt(struct block_device *bdev, enum req_opf op,
 		return -EINVAL;
 
 	/* Check alignment (handle eventual smaller last zone) */
-	if (sector & (zone_sectors - 1))
+	if (zone_sectors == 0 || sector % zone_sectors)
 		return -EINVAL;
 
-	if ((nr_sectors & (zone_sectors - 1)) && end_sector != capacity)
+	if ((nr_sectors % zone_sectors) && end_sector != capacity) {
 		return -EINVAL;
+	}
 
 	while (sector < end_sector) {
 		bio = blk_next_bio(bio, 0, gfp_mask);
@@ -379,7 +381,7 @@ static int blk_revalidate_zone_cb(struct blk_zone *zone, unsigned int idx,
 		}
 
 		args->zone_sectors = zone->len;
-		args->nr_zones = (capacity + zone->len - 1) >> ilog2(zone->len);
+		args->nr_zones = (capacity + zone->len - 1) / zone->len;
 	} else if (zone->start + args->zone_sectors < capacity) {
 		if (zone->len != args->zone_sectors) {
 			pr_warn("%s: Invalid zoned device with non constant zone size\n",
