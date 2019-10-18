@@ -2060,8 +2060,8 @@ static blk_qc_t blk_mq_make_request(struct request_queue *q, struct bio *bio)
 			blk_mq_try_issue_directly(data.hctx, same_queue_rq,
 					&cookie);
 		}
-	} else if ((q->nr_hw_queues > 1 && is_sync) ||
-			!data.hctx->dispatch_busy) {
+	} else if ((q->nr_hw_queues > 1 && (is_sync && !blk_queue_is_zoned(q)))
+			|| !data.hctx->dispatch_busy) {
 		/*
 		 * There is no scheduler and we can try to send directly
 		 * to the hardware.
