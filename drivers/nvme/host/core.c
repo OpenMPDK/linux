@@ -1041,6 +1041,7 @@ static int nvme_identify_ctrl(struct nvme_ctrl *dev, struct nvme_id_ctrl **id)
 	/* gcc-4.4.4 (at least) has issues with initializers and anon unions */
 	c.identify.opcode = nvme_admin_identify;
 	c.identify.cns = NVME_ID_CNS_CTRL;
+	c.identify.nst = NVME_NSTYPE_ANY;
 
 	*id = kmalloc(sizeof(struct nvme_id_ctrl), GFP_KERNEL);
 	if (!*id)
@@ -1065,6 +1066,7 @@ static int nvme_identify_ns_descs(struct nvme_ctrl *ctrl, unsigned nsid,
 	c.identify.opcode = nvme_admin_identify;
 	c.identify.nsid = cpu_to_le32(nsid);
 	c.identify.cns = NVME_ID_CNS_NS_DESC_LIST;
+	c.identify.nst = NVME_NSTYPE_ANY;
 
 	data = kzalloc(NVME_IDENTIFY_DATA_SIZE, GFP_KERNEL);
 	if (!data)
@@ -1125,19 +1127,22 @@ free_data:
 	return status;
 }
 
-static int nvme_identify_ns_list(struct nvme_ctrl *dev, unsigned nsid, __le32 *ns_list)
+static int nvme_identify_ns_list(struct nvme_ctrl *dev, unsigned nsid,
+				 u8 nstype, __le32 *ns_list)
 {
 	struct nvme_command c = { };
 
 	c.identify.opcode = nvme_admin_identify;
 	c.identify.cns = NVME_ID_CNS_NS_ACTIVE_LIST;
 	c.identify.nsid = cpu_to_le32(nsid);
+	c.identify.nst = nstype;
+
 	return nvme_submit_sync_cmd(dev->admin_q, &c, ns_list,
 				    NVME_IDENTIFY_DATA_SIZE);
 }
 
 static int nvme_identify_ns(struct nvme_ctrl *ctrl,
-		unsigned nsid, struct nvme_id_ns **id)
+		unsigned nsid, struct nvme_id_ns **id, u8 nstype)
 {
 	struct nvme_command c = { };
 	int error;
@@ -1146,6 +1151,7 @@ static int nvme_identify_ns(struct nvme_ctrl *ctrl,
 	c.identify.opcode = nvme_admin_identify;
 	c.identify.nsid = cpu_to_le32(nsid);
 	c.identify.cns = NVME_ID_CNS_NS;
+	c.identify.nst = nstype;
 
 	*id = kmalloc(sizeof(**id), GFP_KERNEL);
 	if (!*id)
@@ -1866,7 +1872,7 @@ static int nvme_revalidate_disk(struct gendisk *disk)
 		return -ENODEV;
 	}
 
-	ret = nvme_identify_ns(ctrl, ns->head->ns_id, &id);
+	ret = nvme_identify_ns(ctrl, ns->head->ns_id, &id, ns->type);
 	if (ret)
 		goto out;
 
@@ -2237,6 +2243,14 @@ static int nvme_configure_acre(struct nvme_ctrl *ctrl)
 				host, sizeof(*host), NULL);
 	kfree(host);
 	return ret;
+}
+
+static int nvme_configure_command_profile(struct nvme_ctrl *ctrl, u64 comb)
+{
+	u32 result;
+
+	return nvme_set_features(ctrl, NVME_FEAT_COMM_SET_PROF, comb, NULL, 0,
+								&result);
 }
 
 static int nvme_configure_apst(struct nvme_ctrl *ctrl)
@@ -2724,6 +2738,66 @@ static int nvme_get_effects_log(struct nvme_ctrl *ctrl)
 	return ret;
 }
 
+static int nvme_configure_io_cmd_set(struct nvme_ctrl *ctrl)
+{
+	struct nvme_command c = { };
+	__le64 *list;
+	u64 default_comb = 0;
+	unsigned i;
+	int ret = 0;
+
+	if (!(NVME_CAP_CSS(ctrl->cap) & NVME_CMD_SET_MULTIPLE_SUPP))
+		return 0;
+
+	list = kzalloc(0x1000, GFP_KERNEL);
+	if (!list)
+		return -ENOMEM;
+
+	c.identify.opcode = nvme_admin_identify;
+	c.identify.cns = NVME_ID_CNS_IO_COMMAND_SET;
+	c.identify.nst = NVME_NSTYPE_ANY;
+	c.identify.ctrlid = NVME_CNTLID_DYNAMIC;
+
+	ret = nvme_submit_sync_cmd(ctrl->admin_q, &c, list, 0x1000);
+	if (ret) {
+		dev_warn(ctrl->device,
+				"Identify I/O command set failed (%d)\n", ret);
+		goto out;
+	}
+
+	for (i = 0; i < 64; i++) {
+		if (!le64_to_cpu(list[i]))
+			break;
+	}
+
+	ctrl->csc.ncomb = i;
+	ctrl->csc.comb = kzalloc(ctrl->csc.ncomb * sizeof(u64), GFP_KERNEL);
+	if (!ctrl->csc.comb) {
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	for (i = 0; i < ctrl->csc.ncomb; i++) {
+		ctrl->csc.comb[i] = le64_to_cpu(list[i]);
+		//TODO: JAVIER: DO bitmaps for 64bits
+		/* if (bitmap_weight(&(ctrl->csc.comb[i]), sizeof(u64)) > */
+				/* bitmap_weight(&default_comb, sizeof(u64))) */
+			/* default_comb = ctrl->csc.comb[i]; */
+	}
+
+	default_comb = ctrl->csc.comb[0];
+
+	/* By default, choose the combination with most coverage */
+	ret = nvme_configure_command_profile(ctrl, default_comb);
+	if (ret)
+		dev_warn(ctrl->device,
+				"Command set profile failed (%d)\n", ret);
+
+out:
+	kfree(list);
+	return ret ;
+}
+
 /*
  * Initialize the cached copies of the Identify data and various controller
  * register in our nvme_ctrl structure.  This should be called as soon as
@@ -2899,6 +2973,10 @@ int nvme_init_identify(struct nvme_ctrl *ctrl)
 		return ret;
 
 	ret = nvme_configure_acre(ctrl);
+	if (ret < 0)
+		return ret;
+
+	ret = nvme_configure_io_cmd_set(ctrl);
 	if (ret < 0)
 		return ret;
 
@@ -3478,7 +3556,7 @@ static int nvme_setup_streams_ns(struct nvme_ctrl *ctrl, struct nvme_ns *ns)
 	return 0;
 }
 
-static int nvme_alloc_ns(struct nvme_ctrl *ctrl, unsigned nsid)
+static int nvme_alloc_ns(struct nvme_ctrl *ctrl, unsigned nsid, u8 nstype)
 {
 	struct nvme_ns *ns;
 	struct gendisk *disk;
@@ -3506,6 +3584,7 @@ static int nvme_alloc_ns(struct nvme_ctrl *ctrl, unsigned nsid)
 
 	ns->queue->queuedata = ns;
 	ns->ctrl = ctrl;
+	ns->type = nstype;
 
 	kref_init(&ns->kref);
 	ns->lba_shift = 9; /* set to a default value for 512 until disk is validated */
@@ -3513,7 +3592,7 @@ static int nvme_alloc_ns(struct nvme_ctrl *ctrl, unsigned nsid)
 	blk_queue_logical_block_size(ns->queue, 1 << ns->lba_shift);
 	nvme_set_queue_limits(ctrl, ns->queue);
 
-	ret = nvme_identify_ns(ctrl, nsid, &id);
+	ret = nvme_identify_ns(ctrl, nsid, &id, ns->type);
 	if (ret)
 		goto out_free_queue;
 
@@ -3611,7 +3690,7 @@ static void nvme_ns_remove(struct nvme_ns *ns)
 	nvme_put_ns(ns);
 }
 
-static void nvme_validate_ns(struct nvme_ctrl *ctrl, unsigned nsid)
+static void nvme_validate_ns(struct nvme_ctrl *ctrl, unsigned nsid, u8 nstype)
 {
 	struct nvme_ns *ns;
 
@@ -3621,7 +3700,7 @@ static void nvme_validate_ns(struct nvme_ctrl *ctrl, unsigned nsid)
 			nvme_ns_remove(ns);
 		nvme_put_ns(ns);
 	} else
-		nvme_alloc_ns(ctrl, nsid);
+		nvme_alloc_ns(ctrl, nsid, nstype);
 }
 
 static void nvme_remove_invalid_namespaces(struct nvme_ctrl *ctrl,
@@ -3639,47 +3718,73 @@ static void nvme_remove_invalid_namespaces(struct nvme_ctrl *ctrl,
 
 	list_for_each_entry_safe(ns, next, &rm_list, list)
 		nvme_ns_remove(ns);
-
 }
 
-static int nvme_scan_ns_list(struct nvme_ctrl *ctrl, unsigned nn)
+static int nvme_scan_ns(struct nvme_ctrl *ctrl, unsigned nn,
+			u8 nstype)
 {
-	struct nvme_ns *ns;
+	/* struct nvme_ns *ns; */
 	__le32 *ns_list;
-	unsigned i, j, nsid, prev = 0;
-	unsigned num_lists = DIV_ROUND_UP_ULL((u64)nn, 1024);
+	unsigned i, nsid, prev = 0;
 	int ret = 0;
 
 	ns_list = kzalloc(NVME_IDENTIFY_DATA_SIZE, GFP_KERNEL);
 	if (!ns_list)
 		return -ENOMEM;
 
-	for (i = 0; i < num_lists; i++) {
-		ret = nvme_identify_ns_list(ctrl, prev, ns_list);
-		if (ret)
-			goto free;
+	ret = nvme_identify_ns_list(ctrl, prev, nstype, ns_list);
+	if (ret)
+		goto free;
 
-		for (j = 0; j < min(nn, 1024U); j++) {
-			nsid = le32_to_cpu(ns_list[j]);
-			if (!nsid)
-				goto out;
+	for (i = 0; i < min(nn, 1024U); i++) {
+		nsid = le32_to_cpu(ns_list[i]);
+		if (!nsid)
+			goto out;
 
-			nvme_validate_ns(ctrl, nsid);
+		nvme_validate_ns(ctrl, nsid, nstype);
 
-			while (++prev < nsid) {
-				ns = nvme_find_get_ns(ctrl, prev);
-				if (ns) {
-					nvme_ns_remove(ns);
-					nvme_put_ns(ns);
-				}
-			}
-		}
-		nn -= j;
+		/*TODO: This needs to be addressed */
+		/* while (++prev < nsid) { */
+			/* ns = nvme_find_get_ns(ctrl, prev); */
+			/* if (ns) { */
+				/* nvme_ns_remove(ns); */
+				/* nvme_put_ns(ns); */
+			/* } */
+		/* } */
 	}
- out:
-	nvme_remove_invalid_namespaces(ctrl, prev);
- free:
+	nn -= i;
+free:
 	kfree(ns_list);
+out:
+	/*TODO: This needs to be addressed */
+	/* nvme_remove_invalid_namespaces(ctrl, prev); */
+	return ret;
+}
+
+static int nvme_scan_ns_list(struct nvme_ctrl *ctrl, unsigned nn)
+{
+	u64 nstypes = 0;
+	unsigned i, num_lists = DIV_ROUND_UP_ULL((u64)nn, 1024);
+	int ret = 0;
+
+	/* Scan namespace types that match supported command sets */
+	for (i = 0; i < ctrl->csc.ncomb; i++)
+		nstypes = nstypes | ctrl->csc.comb[i];
+
+	for (i = 0; i < num_lists; i++) {
+		if (nstypes & NVME_IO_CMD_VECTOR_CONV) {
+			ret = nvme_scan_ns(ctrl, nn, NVME_NSTYPE_CONV);
+			if (ret)
+				return ret;
+		}
+
+		if (nstypes & NVME_IO_CMD_VECTOR_ZONED) {
+			ret = nvme_scan_ns(ctrl, nn, NVME_NSTYPE_ZONED);
+			if (ret)
+				return ret;
+		}
+	}
+
 	return ret;
 }
 
@@ -3688,7 +3793,7 @@ static void nvme_scan_ns_sequential(struct nvme_ctrl *ctrl, unsigned nn)
 	unsigned i;
 
 	for (i = 1; i <= nn; i++)
-		nvme_validate_ns(ctrl, i);
+		nvme_validate_ns(ctrl, i, 0); //TODO:JAVIER
 
 	nvme_remove_invalid_namespaces(ctrl, nn);
 }
@@ -4016,6 +4121,7 @@ static void nvme_free_ctrl(struct device *dev)
 		mutex_unlock(&nvme_subsystems_lock);
 	}
 
+	kfree(ctrl->csc.comb);
 	ctrl->ops->free_ctrl(ctrl);
 
 	if (subsys)
