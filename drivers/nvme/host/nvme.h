@@ -188,6 +188,11 @@ struct nvme_fault_inject {
 #endif
 };
 
+struct nvme_cmd_set_comb {
+	u8 ncomb;
+	u64 *comb;
+};
+
 struct nvme_ctrl {
 	bool comp_seen;
 	enum nvme_ctrl_state state;
@@ -216,6 +221,8 @@ struct nvme_ctrl {
 	struct list_head subsys_entry;
 
 	struct opal_dev *opal_dev;
+
+	struct nvme_cmd_set_comb csc;
 
 	char name[12];
 	u16 cntlid;
@@ -391,6 +398,7 @@ struct nvme_ns {
 
 	struct nvme_fault_inject fault_inject;
 
+	unsigned type;
 };
 
 struct nvme_ctrl_ops {
