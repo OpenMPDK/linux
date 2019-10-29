@@ -194,7 +194,8 @@ static u64 nvme_zns_nr_zones(struct nvme_ns *ns)
 	u64 nr_zones;
 
 	nr_zones = get_capacity(disk) >> (ns->lba_shift - 9);
-	do_div(nr_zones, (ns->zone_secs));
+	if (do_div(nr_zones, (ns->zone_secs)))
+		nr_zones++;
 
 	return nr_zones;
 }
