@@ -20,6 +20,7 @@
 #include <linux/nvme_ioctl.h>
 #include <linux/t10-pi.h>
 #include <linux/pm_qos.h>
+#include <linux/blkzoned.h>
 #include <asm/unaligned.h>
 
 #include "nvme.h"
@@ -160,6 +161,214 @@ int nvme_reset_ctrl_sync(struct nvme_ctrl *ctrl)
 	return ret;
 }
 EXPORT_SYMBOL_GPL(nvme_reset_ctrl_sync);
+
+#ifdef CONFIG_BLK_DEV_ZONED
+
+static void nvme_zns_parse_zone(struct nvme_ns *ns, struct nvme_zone_desc *zd,
+				 struct blk_zone *blk_zone)
+{
+	/*
+	 * TODO: JAVIER
+	 * For now populate existing zoned block structure
+	 * Missing values:
+	 *	- zd->za
+	 */
+	blk_zone->start = nvme_lbad_to_sec(ns, le64_to_cpu(zd->zslba));
+	blk_zone->len = nvme_lbad_to_sec(ns, le64_to_cpu(zd->zcap));
+	blk_zone->wp = nvme_lbad_to_sec(ns, le64_to_cpu(zd->wp));
+	blk_zone->type = zd->zt;
+	blk_zone->cond = (zd->zs >> 4) & 0xf;
+	blk_zone->reset = 1;
+}
+
+static void nvme_zns_clean_zones(struct blk_zone *blk_zones,
+				 unsigned int nr_zones)
+{
+	int i;
+
+	for (i = 0; i < nr_zones; i++)
+		memset(&blk_zones[i], 0, sizeof(struct blk_zone));
+}
+
+static int nvme_zone_mgmt_rcv(struct nvme_ns *ns, unsigned int zra,
+			      unsigned int zrasf, unsigned int zrasfe,
+			      void *buf, sector_t slba, u32 size)
+{
+	struct nvme_command c = { };
+
+	c.zmgmt_rcv.opcode = nvme_cmd_zns_mgmt_rcv;
+	c.zmgmt_rcv.nsid = cpu_to_le32(ns->head->ns_id);
+	c.zmgmt_rcv.zra = zra;
+	c.zmgmt_rcv.zrasf = zrasf;
+	c.zmgmt_rcv.zrasfe = zrasfe;
+	c.zmgmt_rcv.slba = cpu_to_le64(slba);
+	c.zmgmt_rcv.ndw = (size >> 2) - 1;
+
+	return nvme_submit_sync_cmd(ns->queue, &c, buf, size);
+}
+
+static u64 nvme_zns_nr_zones(struct nvme_ns *ns)
+{
+	void *buf;
+	int ret;
+
+	buf = kmalloc(sizeof(struct nvme_zone_report), GFP_KERNEL);
+	if (!buf)
+		return -ENOMEM;
+
+	ret = nvme_zone_mgmt_rcv(ns,
+				NVME_CMD_ZONE_MGMT_RCV_REPORT_ZONES,
+				NVME_CMD_ZONE_MGMT_RCV_LIST_ALL,
+				0, buf, 0, sizeof(struct nvme_zone_report));
+	if (ret) {
+		dev_warn(ns->ctrl->device, "Command ZMR failed (%d)\n", ret);
+		return ret;
+	}
+
+	return ((struct nvme_zone_report *)buf)->nr_zones;
+}
+
+static int nvme_zns_update(struct nvme_ns *ns)
+{
+	struct nvme_ctrl *ctrl = ns->ctrl;
+	void *buf;
+	sector_t slba = 0;
+	int buf_sz, max_sz, zone_off = 0;
+	int nr_zones, ret;
+
+	max_sz = ctrl->max_hw_sectors << 9;
+	nr_zones = min_t(u64, ns->nr_zones,
+				max_sz / sizeof(struct nvme_zone_desc));
+	buf_sz = sizeof(struct nvme_zone_report) +
+				nr_zones * sizeof(struct nvme_zone_desc);
+
+	buf = kmalloc(buf_sz, GFP_KERNEL);
+	if (!buf)
+		return -ENOMEM;
+
+	while (zone_off < ns->nr_zones) {
+		struct nvme_zone_report *zone_report;
+		struct nvme_zone_desc *zd;
+		int i;
+
+		ret = nvme_zone_mgmt_rcv(ns,
+					NVME_CMD_ZONE_MGMT_RCV_REPORT_ZONES,
+					NVME_CMD_ZONE_MGMT_RCV_LIST_ALL,
+					NVME_CMD_ZONE_MGMT_RCV_PARTIAL,
+					buf, slba, buf_sz);
+		if (ret) {
+			dev_warn(ctrl->device,
+					"Command ZMR failed (%d)\n", ret);
+			goto out;
+		}
+
+		zone_report = buf;
+		zd = buf + sizeof(struct nvme_zone_report);
+
+		for (i = 0; i < zone_report->nr_zones; i++) {
+			if (zone_off + i >= ns->nr_zones)
+				break;
+
+			if (zd[i].zt != BLK_ZONE_TYPE_SEQWRITE_REQ) {
+				dev_warn(ctrl->device,
+					"Invalid zone (%d) type: %d\n",
+								i, zd[i].zt);
+				nvme_zns_clean_zones(ns->zones, i + zone_off);
+				ret = -EINVAL;
+				goto out;
+			}
+
+			nvme_zns_parse_zone(ns, &zd[i],
+						&ns->zones[i + zone_off]);
+		}
+
+		slba += zone_report->nr_zones * ns->zone_secs;
+		zone_off += zone_report->nr_zones;
+	}
+
+out:
+	kfree(buf);
+	return ret;
+}
+
+static int nvme_zns_zone_report(struct gendisk *disk, sector_t sector,
+				unsigned int nr_zones, report_zones_cb cb,
+				void *data)
+{
+	struct nvme_ns *ns = disk->private_data;
+	struct blk_zone zone;
+	unsigned int zno, i, nrz = 0;
+	int ret;
+
+	ret = nvme_zns_update(ns);
+	if (ret)
+		return ret;
+
+	zno = sector >> ilog2(ns->zone_secs);
+	if (zno < ns->nr_zones) {
+		nrz = min_t(unsigned int, nr_zones, ns->nr_zones - zno);
+
+		for (i = 0; i < nrz; i++) {
+			memcpy(&zone, &ns->zones[zno + i],
+						sizeof(struct blk_zone));
+
+			ret = cb(&zone, i, data);
+			if (ret)
+				return ret;
+		}
+	}
+
+	return nrz;
+}
+
+static void nvme_config_zoned(struct gendisk *disk, struct nvme_ns *ns)
+{
+	struct request_queue *queue = disk->queue;
+
+	blk_queue_chunk_sectors(queue, ns->zone_secs << (ns->lba_shift - 9));
+	queue->limits.zoned = BLK_ZONED_HM;
+	queue->nr_zones = ns->nr_zones;
+}
+
+static int nvme_zns_init(struct nvme_ns *ns, struct nvme_id_ns *id,
+			 struct nvme_id_zns *zns_id)
+{
+	int ret;
+
+	ns->is_zoned = true;
+	ns->zone_secs = zns_id->lbafe[id->flbas & NVME_NS_FLBAS_LBA_MASK].zsze;
+	ns->zds = zns_id->lbafe[id->flbas & NVME_NS_FLBAS_LBA_MASK].zdes << 6;
+
+	ret = nvme_zns_nr_zones(ns);
+	if (ret < 0)
+		return ret;
+
+	ns->nr_zones = ret;
+	ns->mar = le32_to_cpu(zns_id->mar);
+	ns->mor = le32_to_cpu(zns_id->mor);
+	ns->rrl = le32_to_cpu(zns_id->rrl);
+	ns->frl = le32_to_cpu(zns_id->frl);
+	ns->zoc = le16_to_cpu(zns_id->zoc);
+
+	ns->zones = kvzalloc(ns->nr_zones * sizeof(struct blk_zone),
+								GFP_KERNEL);
+	if (!ns->zones)
+		return -ENOMEM;
+
+	return 0;
+}
+
+static void nvme_zns_exit(struct nvme_ns *ns)
+{
+	kvfree(ns->zones);
+}
+#else
+static int nvme_zns_zone_report(struct gendisk *disk, sector_t sector,
+				struct blk_zone *zones, unsigned int *nr_zones)
+{
+	return -ENOTSUPP;
+}
+#endif
 
 static void nvme_do_delete_ctrl(struct nvme_ctrl *ctrl)
 {
@@ -459,6 +668,10 @@ static void nvme_free_ns(struct kref *kref)
 	if (ns->ndev)
 		nvme_nvm_unregister(ns);
 
+#ifdef CONFIG_BLK_DEV_ZONED
+	nvme_zns_exit(ns);
+#endif
+
 	put_disk(ns->disk);
 	nvme_put_ns_head(ns->head);
 	nvme_put_ctrl(ns->ctrl);
@@ -738,6 +951,42 @@ static inline blk_status_t nvme_setup_rw(struct nvme_ns *ns,
 	return 0;
 }
 
+static inline blk_status_t nvme_setup_zmgmt_send(struct nvme_ns *ns,
+						 struct request *req,
+						 struct nvme_command *cmnd)
+{
+	cmnd->zmgmt_send.opcode = nvme_cmd_zns_mgmt_send;
+	cmnd->zmgmt_send.nsid = cpu_to_le32(ns->head->ns_id);
+	cmnd->zmgmt_send.slba =
+			cpu_to_le64(blk_rq_pos(req) >> (ns->lba_shift - 9));
+
+	if (bio_op(req->bio) & REQ_ZONE_ALL)
+		cmnd->zmgmt_send.zflags |= NVME_CMD_ZONE_MGMT_SEND_ALL;
+
+	switch (req_op(req)) {
+	case REQ_OP_ZONE_CLOSE:
+		cmnd->zmgmt_send.zsa = NVME_CMD_ZONE_MGMT_SEND_CLOSE;
+		break;
+	case REQ_OP_ZONE_FINISH:
+		cmnd->zmgmt_send.zsa = NVME_CMD_ZONE_MGMT_SEND_FINISH;
+		break;
+	case REQ_OP_ZONE_OPEN:
+		cmnd->zmgmt_send.zsa = NVME_CMD_ZONE_MGMT_SEND_OPEN;
+		break;
+	case REQ_OP_ZONE_RESET:
+		cmnd->zmgmt_send.zsa = NVME_CMD_ZONE_MGMT_SEND_RESET;
+		break;
+	case REQ_OP_ZONE_OFFLINE:
+		cmnd->zmgmt_send.zsa = NVME_CMD_ZONE_MGMT_SEND_OFFLINE;
+		break;
+	default:
+		WARN_ON_ONCE(1);
+		return BLK_STS_IOERR;
+	}
+
+	return BLK_STS_OK;
+}
+
 void nvme_cleanup_cmd(struct request *req)
 {
 	if (req->rq_flags & RQF_SPECIAL_PAYLOAD) {
@@ -777,6 +1026,13 @@ blk_status_t nvme_setup_cmd(struct nvme_ns *ns, struct request *req,
 	case REQ_OP_READ:
 	case REQ_OP_WRITE:
 		ret = nvme_setup_rw(ns, req, cmd);
+		break;
+	case REQ_OP_ZONE_CLOSE:
+	case REQ_OP_ZONE_FINISH:
+	case REQ_OP_ZONE_OPEN:
+	case REQ_OP_ZONE_RESET:
+	case REQ_OP_ZONE_OFFLINE:
+		ret = nvme_setup_zmgmt_send(ns, req, cmd);
 		break;
 	default:
 		WARN_ON_ONCE(1);
@@ -1114,6 +1370,16 @@ static int nvme_identify_ns_descs(struct nvme_ctrl *ctrl, unsigned nsid,
 			len = NVME_NIDT_UUID_LEN;
 			uuid_copy(&ids->uuid, data + pos + sizeof(*cur));
 			break;
+		case NVME_NIDT_CSI:
+			if (cur->nidl != NVME_NIDT_CSI_LEN) {
+				dev_warn(ctrl->device,
+					 "ctrl returned bogus length: %d for NVME_NIDT_CSI\n",
+					 cur->nidl);
+				goto free_data;
+			}
+			len = NVME_NIDT_CSI_LEN;
+			memcpy(&ids->csi, data + pos + sizeof(*cur), len);
+			break;
 		default:
 			/* Skip unknown types */
 			len = cur->nidl;
@@ -1127,19 +1393,23 @@ free_data:
 	return status;
 }
 
-static int nvme_identify_ns_list(struct nvme_ctrl *dev, unsigned nsid, __le32 *ns_list)
+static int nvme_identify_ns_list(struct nvme_ctrl *dev, unsigned int nsid,
+				 unsigned int csi, __le32 *ns_list)
 {
 	struct nvme_command c = { };
 
 	c.identify.opcode = nvme_admin_identify;
 	c.identify.cns = NVME_ID_CNS_NS_ACTIVE_LIST;
 	c.identify.nsid = cpu_to_le32(nsid);
+	c.identify.csi = csi;
+
 	return nvme_submit_sync_cmd(dev->admin_q, &c, ns_list,
 				    NVME_IDENTIFY_DATA_SIZE);
 }
 
 static int nvme_identify_ns(struct nvme_ctrl *ctrl,
-		unsigned nsid, struct nvme_id_ns **id)
+			    unsigned int nsid, struct nvme_id_ns **id,
+			    unsigned int csi)
 {
 	struct nvme_command c = { };
 	int error;
@@ -1147,7 +1417,12 @@ static int nvme_identify_ns(struct nvme_ctrl *ctrl,
 	/* gcc-4.4.4 (at least) has issues with initializers and anon unions */
 	c.identify.opcode = nvme_admin_identify;
 	c.identify.nsid = cpu_to_le32(nsid);
-	c.identify.cns = NVME_ID_CNS_NS;
+	c.identify.csi = csi;
+
+	if (csi == NVME_IOCS_NVM)
+		c.identify.cns = NVME_ID_CNS_NS;
+	else
+		c.identify.cns = NVME_ID_CNS_NS_IOCS;
 
 	*id = kmalloc(sizeof(**id), GFP_KERNEL);
 	if (!*id)
@@ -1815,6 +2090,11 @@ static void nvme_update_disk_info(struct gendisk *disk,
 	nvme_config_discard(disk, ns);
 	nvme_config_write_zeroes(disk, ns);
 
+#ifdef CONFIG_BLK_DEV_ZONED
+	if (ns->is_zoned)
+		nvme_config_zoned(disk, ns);
+#endif
+
 	if (id->nsattr & (1 << 0))
 		set_disk_ro(disk, true);
 	else
@@ -1835,8 +2115,10 @@ static void __nvme_revalidate_disk(struct gendisk *disk, struct nvme_id_ns *id)
 	if (ns->lba_shift == 0)
 		ns->lba_shift = 9;
 	ns->noiob = le16_to_cpu(id->noiob);
+
 	ns->ms = le16_to_cpu(id->lbaf[id->flbas & NVME_NS_FLBAS_LBA_MASK].ms);
 	ns->ext = ns->ms && (id->flbas & NVME_NS_FLBAS_META_EXT);
+
 	/* the PI implementation requires metadata equal t10 pi tuple size */
 	if (ns->ms == sizeof(struct t10_pi_tuple))
 		ns->pi_type = id->dps & NVME_NS_DPS_PI_MASK;
@@ -1846,6 +2128,20 @@ static void __nvme_revalidate_disk(struct gendisk *disk, struct nvme_id_ns *id)
 	if (ns->noiob)
 		nvme_set_chunk_size(ns);
 	nvme_update_disk_info(disk, ns, id);
+
+#ifdef CONFIG_BLK_DEV_ZONED
+	if (ns->is_zoned) {
+		int ret;
+
+		nvme_config_zoned(disk, ns);
+
+		ret = blk_revalidate_disk_zones(disk);
+		if (ret)
+			dev_err(ns->ctrl->device,
+				"revalidating disk zones failed\n");
+	}
+#endif
+
 #ifdef CONFIG_NVME_MULTIPATH
 	if (ns->head->disk) {
 		nvme_update_disk_info(ns->head->disk, ns, id);
@@ -1868,7 +2164,7 @@ static int nvme_revalidate_disk(struct gendisk *disk)
 		return -ENODEV;
 	}
 
-	ret = nvme_identify_ns(ctrl, ns->head->ns_id, &id);
+	ret = nvme_identify_ns(ctrl, ns->head->ns_id, &id, ns->csi);
 	if (ret)
 		goto out;
 
@@ -2033,6 +2329,7 @@ static const struct block_device_operations nvme_fops = {
 	.getgeo		= nvme_getgeo,
 	.revalidate_disk= nvme_revalidate_disk,
 	.pr_ops		= &nvme_pr_ops,
+	.report_zones	= nvme_zns_zone_report,
 };
 
 #ifdef CONFIG_NVME_MULTIPATH
@@ -2138,7 +2435,11 @@ int nvme_enable_ctrl(struct nvme_ctrl *ctrl)
 
 	ctrl->page_size = 1 << page_shift;
 
-	ctrl->ctrl_config = NVME_CC_CSS_NVM;
+	if ((NVME_CAP_CSS(ctrl->cap)) & NVME_IOCS_MULTIPLE_SUPP)
+		ctrl->ctrl_config = NVME_CC_CSS_MULTIPLE;
+	else
+		ctrl->ctrl_config = NVME_CC_CSS_NVM;
+
 	ctrl->ctrl_config |= (page_shift - 12) << NVME_CC_MPS_SHIFT;
 	ctrl->ctrl_config |= NVME_CC_AMS_RR | NVME_CC_SHN_NONE;
 	ctrl->ctrl_config |= NVME_CC_IOSQES | NVME_CC_IOCQES;
@@ -2239,6 +2540,14 @@ static int nvme_configure_acre(struct nvme_ctrl *ctrl)
 				host, sizeof(*host), NULL);
 	kfree(host);
 	return ret;
+}
+
+static int nvme_configure_command_profile(struct nvme_ctrl *ctrl, u64 comb)
+{
+	u32 result;
+
+	return nvme_set_features(ctrl, NVME_FEAT_COMM_SET_PROF, comb, NULL, 0,
+								&result);
 }
 
 static int nvme_configure_apst(struct nvme_ctrl *ctrl)
@@ -2726,6 +3035,61 @@ static int nvme_get_effects_log(struct nvme_ctrl *ctrl)
 	return ret;
 }
 
+static int nvme_configure_io_cmd_set(struct nvme_ctrl *ctrl)
+{
+	struct nvme_command c = { };
+	__le64 *list;
+	int i, ret = 0;
+
+	if (!(NVME_CAP_CSS(ctrl->cap) & NVME_IOCS_MULTIPLE_SUPP))
+		return 0;
+
+	list = kzalloc(0x1000, GFP_KERNEL);
+	if (!list)
+		return -ENOMEM;
+
+	c.identify.opcode = nvme_admin_identify;
+	c.identify.cns = NVME_ID_CNS_IOCS;
+	c.identify.ctrlid = NVME_CNTLID_DYNAMIC;
+
+	ret = nvme_submit_sync_cmd(ctrl->admin_q, &c, list, 0x1000);
+	if (ret) {
+		dev_warn(ctrl->device,
+				"Identify I/O command set failed (%d)\n", ret);
+		goto out;
+	}
+
+	for (i = 0; i < 64; i++) {
+		if (!le64_to_cpu(list[i]))
+			break;
+	}
+
+	ctrl->csc.ncomb = i;
+	ctrl->csc.comb = kcalloc(ctrl->csc.ncomb, sizeof(u64), GFP_KERNEL);
+	if (!ctrl->csc.comb) {
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	for (i = 0; i < ctrl->csc.ncomb; i++) {
+		ctrl->csc.comb[i] = le64_to_cpu(list[i]);
+		//TODO: JAVIER: DO bitmaps for 64bits
+		/* if (bitmap_weight(&(ctrl->csc.comb[i]), sizeof(u64)) > */
+				/* bitmap_weight(&default_comb, sizeof(u64))) */
+			/* default_comb = ctrl->csc.comb[i]; */
+	}
+
+	/* By default, choose the combination with most coverage */
+	ret = nvme_configure_command_profile(ctrl, 0);
+	if (ret)
+		dev_warn(ctrl->device,
+				"Command set profile failed (%d)\n", ret);
+
+out:
+	kfree(list);
+	return ret;
+}
+
 /*
  * Initialize the cached copies of the Identify data and various controller
  * register in our nvme_ctrl structure.  This should be called as soon as
@@ -2809,7 +3173,6 @@ int nvme_init_identify(struct nvme_ctrl *ctrl)
 		max_hw_sectors = UINT_MAX;
 	ctrl->max_hw_sectors =
 		min_not_zero(ctrl->max_hw_sectors, max_hw_sectors);
-
 	nvme_set_queue_limits(ctrl, ctrl->admin_q);
 	ctrl->sgls = le32_to_cpu(id->sgls);
 	ctrl->kas = le16_to_cpu(id->kas);
@@ -2891,7 +3254,7 @@ int nvme_init_identify(struct nvme_ctrl *ctrl)
 	ret = nvme_configure_apst(ctrl);
 	if (ret < 0)
 		return ret;
-	
+
 	ret = nvme_configure_timestamp(ctrl);
 	if (ret < 0)
 		return ret;
@@ -2901,6 +3264,10 @@ int nvme_init_identify(struct nvme_ctrl *ctrl)
 		return ret;
 
 	ret = nvme_configure_acre(ctrl);
+	if (ret < 0)
+		return ret;
+
+	ret = nvme_configure_io_cmd_set(ctrl);
 	if (ret < 0)
 		return ret;
 
@@ -3480,7 +3847,7 @@ static int nvme_setup_streams_ns(struct nvme_ctrl *ctrl, struct nvme_ns *ns)
 	return 0;
 }
 
-static int nvme_alloc_ns(struct nvme_ctrl *ctrl, unsigned nsid)
+static int nvme_alloc_ns(struct nvme_ctrl *ctrl, unsigned int nsid, u8 csi)
 {
 	struct nvme_ns *ns;
 	struct gendisk *disk;
@@ -3508,6 +3875,7 @@ static int nvme_alloc_ns(struct nvme_ctrl *ctrl, unsigned nsid)
 
 	ns->queue->queuedata = ns;
 	ns->ctrl = ctrl;
+	ns->csi = csi;
 
 	kref_init(&ns->kref);
 	ns->lba_shift = 9; /* set to a default value for 512 until disk is validated */
@@ -3515,7 +3883,7 @@ static int nvme_alloc_ns(struct nvme_ctrl *ctrl, unsigned nsid)
 	blk_queue_logical_block_size(ns->queue, 1 << ns->lba_shift);
 	nvme_set_queue_limits(ctrl, ns->queue);
 
-	ret = nvme_identify_ns(ctrl, nsid, &id);
+	ret = nvme_identify_ns(ctrl, nsid, &id, NVME_ID_CNS_NS);
 	if (ret)
 		goto out_free_queue;
 
@@ -3541,9 +3909,27 @@ static int nvme_alloc_ns(struct nvme_ctrl *ctrl, unsigned nsid)
 	disk->queue = ns->queue;
 	disk->flags = flags;
 	memcpy(disk->disk_name, disk_name, DISK_NAME_LEN);
-	ns->disk = disk;
 
 	__nvme_revalidate_disk(disk, id);
+
+#ifdef CONFIG_BLK_DEV_ZONED
+	/* Identify ZNS by looking at specific parameters for now */
+	if (ns->csi == NVME_IOCS_ZND) {
+		struct nvme_id_ns *zns_id;
+
+		ret = nvme_identify_ns(ctrl, nsid, &zns_id, NVME_IOCS_ZND);
+		if (ret)
+			goto out_put_disk;
+
+		ret = nvme_zns_init(ns, id, (struct nvme_id_zns *)zns_id);
+		if (ret) {
+			dev_warn(ctrl->device, "ZNS init failure\n");
+			goto out_put_disk;
+		}
+
+		__nvme_revalidate_disk(disk, id);
+	}
+#endif
 
 	if ((ctrl->quirks & NVME_QUIRK_LIGHTNVM) && id->vs[0] == 0x1) {
 		ret = nvme_nvm_register(ns, disk_name, node);
@@ -3552,6 +3938,8 @@ static int nvme_alloc_ns(struct nvme_ctrl *ctrl, unsigned nsid)
 			goto out_put_disk;
 		}
 	}
+
+	ns->disk = disk;
 
 	down_write(&ctrl->namespaces_rwsem);
 	list_add_tail(&ns->list, &ctrl->namespaces);
@@ -3613,7 +4001,8 @@ static void nvme_ns_remove(struct nvme_ns *ns)
 	nvme_put_ns(ns);
 }
 
-static void nvme_validate_ns(struct nvme_ctrl *ctrl, unsigned nsid)
+static void nvme_validate_ns(struct nvme_ctrl *ctrl, unsigned int nsid,
+			     unsigned int csi)
 {
 	struct nvme_ns *ns;
 
@@ -3623,7 +4012,7 @@ static void nvme_validate_ns(struct nvme_ctrl *ctrl, unsigned nsid)
 			nvme_ns_remove(ns);
 		nvme_put_ns(ns);
 	} else
-		nvme_alloc_ns(ctrl, nsid);
+		nvme_alloc_ns(ctrl, nsid, csi);
 }
 
 static void nvme_remove_invalid_namespaces(struct nvme_ctrl *ctrl,
@@ -3641,58 +4030,110 @@ static void nvme_remove_invalid_namespaces(struct nvme_ctrl *ctrl,
 
 	list_for_each_entry_safe(ns, next, &rm_list, list)
 		nvme_ns_remove(ns);
-
 }
 
-static int nvme_scan_ns_list(struct nvme_ctrl *ctrl, unsigned nn)
+static int nvme_scan_ns(struct nvme_ctrl *ctrl, unsigned int nn,
+			unsigned int csi)
 {
 	struct nvme_ns *ns;
+	struct nvme_ns_ids ids;
 	__le32 *ns_list;
-	unsigned i, j, nsid, prev = 0;
-	unsigned num_lists = DIV_ROUND_UP_ULL((u64)nn, 1024);
+	unsigned int i, nsid, prev = 0;
 	int ret = 0;
 
 	ns_list = kzalloc(NVME_IDENTIFY_DATA_SIZE, GFP_KERNEL);
 	if (!ns_list)
 		return -ENOMEM;
 
-	for (i = 0; i < num_lists; i++) {
-		ret = nvme_identify_ns_list(ctrl, prev, ns_list);
+	ret = nvme_identify_ns_list(ctrl, prev, csi, ns_list);
+	if (ret)
+		goto free;
+
+	for (i = 0; i < min(nn, 1024U); i++) {
+		nsid = le32_to_cpu(ns_list[i]);
+		if (!nsid)
+			goto out;
+
+		ret = nvme_identify_ns_descs(ctrl, nsid, &ids);
 		if (ret)
-			goto free;
+			return ret;
 
-		for (j = 0; j < min(nn, 1024U); j++) {
-			nsid = le32_to_cpu(ns_list[j]);
-			if (!nsid)
-				goto out;
+		if (csi == ids.csi)
+			nvme_validate_ns(ctrl, nsid, csi);
 
-			nvme_validate_ns(ctrl, nsid);
-
-			while (++prev < nsid) {
-				ns = nvme_find_get_ns(ctrl, prev);
-				if (ns) {
-					nvme_ns_remove(ns);
-					nvme_put_ns(ns);
-				}
+		while (++prev < nsid) {
+			ns = nvme_find_get_ns(ctrl, prev);
+			if (ns) {
+				if (ns->csi != csi)
+					break;
+				nvme_ns_remove(ns);
+				nvme_put_ns(ns);
 			}
 		}
-		nn -= j;
 	}
- out:
+	nn -= i;
+out:
 	nvme_remove_invalid_namespaces(ctrl, prev);
- free:
+free:
 	kfree(ns_list);
 	return ret;
 }
 
-static void nvme_scan_ns_sequential(struct nvme_ctrl *ctrl, unsigned nn)
+static int nvme_scan_ns_list(struct nvme_ctrl *ctrl, unsigned int nn)
 {
-	unsigned i;
+	u64 iocss = 0;
+	unsigned int i, num_lists = DIV_ROUND_UP_ULL((u64)nn, 1024);
+	int ret = 0;
 
-	for (i = 1; i <= nn; i++)
-		nvme_validate_ns(ctrl, i);
+	/* Scan namespace types that match supported command sets */
+	for (i = 0; i < ctrl->csc.ncomb; i++)
+		iocss = iocss | ctrl->csc.comb[i];
+
+	for (i = 0; i < num_lists; i++) {
+		if (!(NVME_CAP_CSS(ctrl->cap) & NVME_IOCS_MULTIPLE_SUPP) ||
+					(iocss & NVME_IOCS_VECTOR_NVM)) {
+			ret = nvme_scan_ns(ctrl, nn, NVME_IOCS_NVM);
+			if (ret)
+				return ret;
+		}
+
+		if (iocss & NVME_IOCS_VECTOR_ZND) {
+			ret = nvme_scan_ns(ctrl, nn, NVME_IOCS_ZND);
+			if (ret)
+				return ret;
+		}
+	}
+
+	return ret;
+}
+
+static int nvme_scan_ns_sequential(struct nvme_ctrl *ctrl, unsigned int nn)
+{
+	struct nvme_ns_ids ids;
+	u64 iocss = 0;
+	unsigned int ret, i;
+
+	/* Scan namespace types that match supported command sets */
+	for (i = 0; i < ctrl->csc.ncomb; i++)
+		iocss = iocss | ctrl->csc.comb[i];
+
+	for (i = 1; i <= nn; i++) {
+		ret = nvme_identify_ns_descs(ctrl, i, &ids);
+		if (ret)
+			return ret;
+
+		if (!(NVME_CAP_CSS(ctrl->cap) & NVME_IOCS_MULTIPLE_SUPP) ||
+				((iocss & NVME_IOCS_VECTOR_NVM) &&
+					ids.csi == NVME_IOCS_NVM))
+			nvme_validate_ns(ctrl, i, NVME_IOCS_NVM);
+
+		if ((iocss & NVME_IOCS_VECTOR_ZND) &&
+						(ids.csi == NVME_IOCS_ZND))
+			nvme_validate_ns(ctrl, i, NVME_IOCS_ZND);
+	}
 
 	nvme_remove_invalid_namespaces(ctrl, nn);
+	return 0;
 }
 
 static void nvme_clear_changed_ns_log(struct nvme_ctrl *ctrl)
@@ -4018,6 +4459,7 @@ static void nvme_free_ctrl(struct device *dev)
 		mutex_unlock(&nvme_subsystems_lock);
 	}
 
+	kfree(ctrl->csc.comb);
 	ctrl->ops->free_ctrl(ctrl);
 
 	if (subsys)
@@ -4231,6 +4673,7 @@ static inline void _nvme_check_size(void)
 	BUILD_BUG_ON(sizeof(struct nvme_command) != 64);
 	BUILD_BUG_ON(sizeof(struct nvme_id_ctrl) != NVME_IDENTIFY_DATA_SIZE);
 	BUILD_BUG_ON(sizeof(struct nvme_id_ns) != NVME_IDENTIFY_DATA_SIZE);
+	BUILD_BUG_ON(sizeof(struct nvme_id_zns) != NVME_IDENTIFY_DATA_SIZE);
 	BUILD_BUG_ON(sizeof(struct nvme_lba_range_type) != 64);
 	BUILD_BUG_ON(sizeof(struct nvme_smart_log) != 512);
 	BUILD_BUG_ON(sizeof(struct nvme_dbbuf) != 64);

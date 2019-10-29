@@ -188,6 +188,11 @@ struct nvme_fault_inject {
 #endif
 };
 
+struct nvme_cmd_set_comb {
+	u8 ncomb;
+	u64 *comb;
+};
+
 struct nvme_ctrl {
 	bool comp_seen;
 	enum nvme_ctrl_state state;
@@ -216,6 +221,8 @@ struct nvme_ctrl {
 	struct list_head subsys_entry;
 
 	struct opal_dev *opal_dev;
+
+	struct nvme_cmd_set_comb csc;
 
 	char name[12];
 	u16 cntlid;
@@ -334,6 +341,7 @@ struct nvme_ns_ids {
 	u8	eui64[8];
 	u8	nguid[16];
 	uuid_t	uuid;
+	u8	csi;
 };
 
 /*
@@ -391,6 +399,21 @@ struct nvme_ns {
 
 	struct nvme_fault_inject fault_inject;
 
+	unsigned int csi;
+
+#ifdef CONFIG_BLK_DEV_ZONED
+	struct blk_zone *zones;
+	sector_t zone_secs;
+	sector_t zds;
+	u64 nr_zones;
+	bool is_zoned;
+
+	u32 mar;
+	u32 mor;
+	u32 rrl;
+	u32 frl;
+	u16 zoc;
+#endif
 };
 
 struct nvme_ctrl_ops {
@@ -448,6 +471,10 @@ static inline sector_t nvme_lba_to_sect(struct nvme_ns *ns, u64 lba)
 	return lba << (ns->lba_shift - SECTOR_SHIFT);
 }
 
+static inline sector_t nvme_lbad_to_sec(struct nvme_ns *ns, sector_t sector)
+{
+	return (sector << (ns->lba_shift - 9));
+}
 static inline void nvme_end_request(struct request *req, __le16 status,
 		union nvme_result result)
 {
@@ -455,6 +482,7 @@ static inline void nvme_end_request(struct request *req, __le16 status,
 
 	rq->status = le16_to_cpu(status) >> 1;
 	rq->result = result;
+
 	/* inject error when permitted by fault injection framework */
 	nvme_should_fail(req);
 	blk_mq_complete_request(req);
