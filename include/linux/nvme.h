@@ -116,6 +116,7 @@ enum {
 #define NVME_CAP_TIMEOUT(cap)	(((cap) >> 24) & 0xff)
 #define NVME_CAP_STRIDE(cap)	(((cap) >> 32) & 0xf)
 #define NVME_CAP_NSSRC(cap)	(((cap) >> 36) & 0x1)
+#define NVME_CAP_CSS(cap)	(((cap) >> 37) & 0xff)
 #define NVME_CAP_MPSMIN(cap)	(((cap) >> 48) & 0xf)
 #define NVME_CAP_MPSMAX(cap)	(((cap) >> 52) & 0xf)
 
@@ -147,6 +148,7 @@ enum {
 enum {
 	NVME_CC_ENABLE		= 1 << 0,
 	NVME_CC_CSS_NVM		= 0 << 4,
+	NVME_CC_CSS_MULTIPLE	= 6 << 4,
 	NVME_CC_EN_SHIFT	= 0,
 	NVME_CC_CSS_SHIFT	= 4,
 	NVME_CC_MPS_SHIFT	= 7,
@@ -352,6 +354,7 @@ enum {
 	NVME_ID_CNS_NS_PRESENT		= 0x11,
 	NVME_ID_CNS_CTRL_NS_LIST	= 0x12,
 	NVME_ID_CNS_CTRL_LIST		= 0x13,
+	NVME_ID_CNS_IO_COMMAND_SET	= 0x18,
 };
 
 enum {
@@ -873,6 +876,7 @@ enum {
 	NVME_FEAT_PLM_CONFIG	= 0x13,
 	NVME_FEAT_PLM_WINDOW	= 0x14,
 	NVME_FEAT_HOST_BEHAVIOR	= 0x16,
+	NVME_FEAT_COMM_SET_PROF	= 0x19,
 	NVME_FEAT_SW_PROGRESS	= 0x80,
 	NVME_FEAT_HOST_ID	= 0x81,
 	NVME_FEAT_RESV_MASK	= 0x82,
@@ -911,7 +915,10 @@ struct nvme_identify {
 	__u8			cns;
 	__u8			rsvd3;
 	__le16			ctrlid;
-	__u32			rsvd11[5];
+	__le16			nvmesetid;
+	__u8			rsvd4;
+	__u8			nst;
+	__u32			rsvd11[4];
 };
 
 #define NVME_IDENTIFY_DATA_SIZE 4096
@@ -1044,6 +1051,19 @@ struct nvme_directive_cmd {
 	__u16			rsvd15;
 
 	__u32			rsvd16[3];
+};
+
+enum {
+	NVME_NSTYPE_CONV		= 0x0,
+	NVME_NSTYPE_ZONED		= 0x1,
+	NVME_NSTYPE_ANY			= 0xff,
+
+	NVME_CMD_SET_SUPP		= 1 << 0,
+	NVME_CMD_SET_MULTIPLE_SUPP	= 1 << 6,
+	NVME_CMD_SET_ADMIN_ONLY_SUPP	= 1 << 7,
+
+	NVME_IO_CMD_VECTOR_CONV		= 1 << 0,
+	NVME_IO_CMD_VECTOR_ZONED	= 1 << 1,
 };
 
 /*
@@ -1328,6 +1348,10 @@ enum {
 	NVME_SC_NS_NOT_ATTACHED		= 0x11a,
 	NVME_SC_THIN_PROV_NOT_SUPP	= 0x11b,
 	NVME_SC_CTRL_LIST_INVALID	= 0x11c,
+	NVME_SC_CMD_SET_INVALID_NSTYPE	= 0x126,
+	NVME_SC_CMD_SET_NOT_SUPPORTED	= 0x127,
+	NVME_SC_CMD_SET_NOT_ENABLED	= 0x128,
+	NVME_SC_CMD_SET_COMB_REJECTED	= 0x129,
 
 	/*
 	 * I/O Command Set Specific - NVM commands:
