@@ -374,13 +374,14 @@ struct nvme_id_ns {
 	__u8			rsvd256[64];
 	__u8			fzsze;
 	__u8			nzonef;
-	__u8			rsvd64[6];
+	__u8			zoc;
+	__u8			rsvd272[13];
 	__u32			nar;
 	__u32			nor;
+	__u8			rsvd288[8];
 	__u32			zal;
 	__u32			rrl;
-	__u8			zoc;
-	__u8			rsvd3776[3495];
+	__u8			rsvd3776[3480];
 	struct nvme_zone_fm	zonef[4];
 	__u8			vs[256];
 };
@@ -1371,6 +1372,8 @@ enum {
 	NVME_CMD_ZONE_MGMT_RCV_LIST_ZSF		= 0x5,
 	NVME_CMD_ZONE_MGMT_RCV_LIST_ZSRO	= 0x6,
 	NVME_CMD_ZONE_MGMT_RCV_LIST_ZSO		= 0x7,
+
+	NVME_CMD_ZONE_MGMT_RCV_PARTIAL		= 0x1,
 };
 
 struct nvme_zone_mgmt_send_command {
@@ -1381,9 +1384,10 @@ struct nvme_zone_mgmt_send_command {
 	__u64			rsvd23[2];
 	union nvme_data_ptr	dptr;
 	__u64			slba;
-	__u8			za;
+	__le32			rsvd51;
+	__u8			zsa;
 	__u8			zflags;
-	__u8			rsvd63[14];
+	__u8			rsvd63[10];
 };
 
 struct nvme_zone_mgmt_rcv_command {
@@ -1395,9 +1399,10 @@ struct nvme_zone_mgmt_rcv_command {
 	union nvme_data_ptr	dptr;
 	__u64			slba;
 	__u32			nbytes;
-	__u8			za;
-	__u8			zasf;
-	__u8			rsvd63[10];
+	__u8			zra;
+	__u8			zrasf;
+	__u8			zrasfe;
+	__u8			rsvd63[9];
 };
 
 struct nvme_command {
