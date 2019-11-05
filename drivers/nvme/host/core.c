@@ -200,19 +200,17 @@ static u64 nvme_zns_nr_zones(struct nvme_ns *ns)
 	return nr_zones;
 }
 
-static int nvme_zone_mgmt_rcv(struct nvme_ns *ns, unsigned za, unsigned zasf,
-			      void *buf, sector_t slba, u32 size)
+static int nvme_zone_mgmt_rcv(struct nvme_ns *ns, unsigned zra, unsigned zrasf,
+			      unsigned zrasfe, void *buf, sector_t slba,
+			      u32 size)
 {
 	struct nvme_command c = { };
 
-	size = ns->nr_zones * sizeof(struct nvme_zone);
-	if (za == NVME_CMD_ZONE_MGMT_RCV_EXT_REPORT_ZONES && ns->zds)
-		size += ns->nr_zones * ns->zds;
-
 	c.zmgmt_rcv.opcode = nvme_cmd_zns_mgmt_rcv;
 	c.zmgmt_rcv.nsid = cpu_to_le32(ns->head->ns_id);
-	c.zmgmt_rcv.zasf = zasf;
-	c.zmgmt_rcv.za = za;
+	c.zmgmt_rcv.zra = zra;
+	c.zmgmt_rcv.zrasf = zrasf;
+	c.zmgmt_rcv.zrasfe = zrasfe;
 	c.zmgmt_rcv.slba = cpu_to_le64(slba);
 	c.zmgmt_rcv.nbytes = size;
 
@@ -243,6 +241,7 @@ static int nvme_zns_update(struct nvme_ns *ns)
 		ret = nvme_zone_mgmt_rcv(ns,
 					NVME_CMD_ZONE_MGMT_RCV_REPORT_ZONES,
 					NVME_CMD_ZONE_MGMT_RCV_LIST_ALL,
+					NVME_CMD_ZONE_MGMT_RCV_PARTIAL,
 					buf, slba, buf_sz);
 		if (ret) {
 			dev_warn(ctrl->device, "Command ZMR failed (%d)\n", ret);
@@ -958,19 +957,19 @@ static inline blk_status_t nvme_setup_zmgmt_send(struct nvme_ns *ns,
 
 	switch (req_op(req)) {
 	case REQ_OP_ZONE_CLOSE:
-		cmnd->zmgmt_send.za = NVME_CMD_ZONE_MGMT_SEND_CLOSE;
+		cmnd->zmgmt_send.zsa = NVME_CMD_ZONE_MGMT_SEND_CLOSE;
 		break;
 	case REQ_OP_ZONE_FINISH:
-		cmnd->zmgmt_send.za = NVME_CMD_ZONE_MGMT_SEND_FINISH;
+		cmnd->zmgmt_send.zsa = NVME_CMD_ZONE_MGMT_SEND_FINISH;
 		break;
 	case REQ_OP_ZONE_OPEN:
-		cmnd->zmgmt_send.za = NVME_CMD_ZONE_MGMT_SEND_OPEN;
+		cmnd->zmgmt_send.zsa = NVME_CMD_ZONE_MGMT_SEND_OPEN;
 		break;
 	case REQ_OP_ZONE_RESET:
-		cmnd->zmgmt_send.za = NVME_CMD_ZONE_MGMT_SEND_RESET;
+		cmnd->zmgmt_send.zsa = NVME_CMD_ZONE_MGMT_SEND_RESET;
 		break;
 	case REQ_OP_ZONE_OFFLINE:
-		cmnd->zmgmt_send.za = NVME_CMD_ZONE_MGMT_SEND_OFFLINE;
+		cmnd->zmgmt_send.zsa = NVME_CMD_ZONE_MGMT_SEND_OFFLINE;
 		break;
 	default:
 		WARN_ON_ONCE(1);
@@ -4067,7 +4066,8 @@ static int nvme_scan_ns_list(struct nvme_ctrl *ctrl, unsigned nn)
 		nstypes = nstypes | ctrl->csc.comb[i];
 
 	for (i = 0; i < num_lists; i++) {
-		if (nstypes & NVME_IO_CMD_VECTOR_CONV) {
+		if (!(NVME_CAP_CSS(ctrl->cap) & NVME_CMD_SET_MULTIPLE_SUPP) ||
+					(nstypes & NVME_IO_CMD_VECTOR_CONV)) {
 			ret = nvme_scan_ns(ctrl, nn, NVME_NSTYPE_CONV);
 			if (ret)
 				return ret;
