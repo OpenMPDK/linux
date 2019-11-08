@@ -167,17 +167,13 @@ EXPORT_SYMBOL_GPL(nvme_reset_ctrl_sync);
 static void nvme_zns_parse_zone(struct nvme_ns *ns, struct nvme_zone *zns_zone,
 				 struct blk_zone *blk_zone)
 {
-	/*
-	 * For now populate existing zoned block structure
-	 * Missing values:
-	 *	- zns_zone->za
-	 */
 	blk_zone->start = nvme_lbad_to_sec(ns, le64_to_cpu(zns_zone->zslba));
 	blk_zone->len = nvme_lbad_to_sec(ns, le64_to_cpu(zns_zone->zcap));
 	blk_zone->wp = nvme_lbad_to_sec(ns, le64_to_cpu(zns_zone->wp));
 	blk_zone->type = zns_zone->zt;
 	blk_zone->cond = (zns_zone->zc >> 4) & 0xf;
 	blk_zone->reset = 1;
+	blk_zone->attr = zns_zone->za;
 }
 
 static void nvme_zns_clean_zones(struct blk_zone *blk_zones, unsigned nr_zones)
