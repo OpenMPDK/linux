@@ -1025,7 +1025,7 @@ static inline unsigned int blk_max_size_offset(struct request_queue *q,
 		return q->limits.max_sectors;
 
 	return min(q->limits.max_sectors, (unsigned int)(q->limits.chunk_sectors -
-			(offset & (q->limits.chunk_sectors - 1))));
+			(offset % q->limits.chunk_sectors)));
 }
 
 static inline unsigned int blk_max_size_offset_zone_append(
@@ -1037,7 +1037,7 @@ static inline unsigned int blk_max_size_offset_zone_append(
 
 	return min(q->limits.max_hw_zone_append_sectors,
 			(unsigned int)(q->limits.chunk_sectors -
-			(offset & (q->limits.chunk_sectors - 1))));
+			(offset % q->limits.chunk_sectors)));
 }
 static inline unsigned int blk_rq_get_max_sectors(struct request *rq,
 						  sector_t offset)
