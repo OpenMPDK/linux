@@ -2918,13 +2918,14 @@ static int init_blkz_info(struct f2fs_sb_info *sbi, int devi)
 				SECTOR_TO_BLOCK(bdev_zone_sectors(bdev)))
 		return -EINVAL;
 	sbi->blocks_per_blkz = SECTOR_TO_BLOCK(bdev_zone_sectors(bdev));
+	/* For non power of 2 blkzone size, this check is useless*/
 	if (sbi->log_blocks_per_blkz && sbi->log_blocks_per_blkz !=
 				__ilog2_u32(sbi->blocks_per_blkz))
 		return -EINVAL;
 	sbi->log_blocks_per_blkz = __ilog2_u32(sbi->blocks_per_blkz);
-	FDEV(devi).nr_blkz = SECTOR_TO_BLOCK(nr_sectors) >>
-					sbi->log_blocks_per_blkz;
-	if (nr_sectors & (bdev_zone_sectors(bdev) - 1))
+	FDEV(devi).nr_blkz = SECTOR_TO_BLOCK(nr_sectors) /
+					sbi->blocks_per_blkz;
+	if (nr_sectors % (bdev_zone_sectors(bdev)))
 		FDEV(devi).nr_blkz++;
 
 	FDEV(devi).blkz_seq = f2fs_kzalloc(sbi,
