@@ -336,8 +336,8 @@ static int nvme_zns_init(struct nvme_ns *ns, struct nvme_id_ns *id)
 	}
 
 	/* update queue limits based on zamds */
-	blk_queue_max_hw_sectors(ns->queue, min(ns->ctrl->max_hw_sectors,
-					ns->ctrl->max_zone_append_sectors));
+	blk_queue_max_hw_zone_append_sectors(ns->queue,
+				ns->ctrl->max_zone_append_sectors);
 
 	/* update queue limits based on zamds */
 	blk_queue_max_hw_sectors(ns->queue, min(ns->ctrl->max_hw_sectors,
