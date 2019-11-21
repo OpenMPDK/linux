@@ -283,7 +283,7 @@ int blkdev_report_zones_ioctl(struct block_device *bdev, fmode_t mode,
  * ioctl processing.
  * Called from blkdev_ioctl.
  */
-int blkdev_zone_mgmt_ioctl(struct block_device *bdev, fmode_t mode,
+int blkdev_zone_ops_ioctl(struct block_device *bdev, fmode_t mode,
 			   unsigned int cmd, unsigned long arg)
 {
 	void __user *argp = (void __user *)arg;
@@ -331,6 +331,55 @@ int blkdev_zone_mgmt_ioctl(struct block_device *bdev, fmode_t mode,
 	}
 
 	return blkdev_zone_mgmt(bdev, op, zrange.sector, zrange.nr_sectors,
+				GFP_KERNEL);
+}
+
+int blkdev_zone_mgmt_ioctl(struct block_device *bdev, fmode_t mode,
+			   unsigned int cmd, unsigned long arg)
+{
+	void __user *argp = (void __user *)arg;
+	struct request_queue *q;
+	struct blk_zone_mgmt zmgmt;
+	enum req_opf op;
+
+	if (!argp)
+		return -EINVAL;
+
+	q = bdev_get_queue(bdev);
+	if (!q)
+		return -ENXIO;
+
+	if (!blk_queue_is_zoned(q))
+		return -ENOTTY;
+
+	if (!capable(CAP_SYS_ADMIN))
+		return -EACCES;
+
+	if (!(mode & FMODE_WRITE))
+		return -EBADF;
+
+	if (copy_from_user(&zmgmt, argp, sizeof(struct blk_zone_mgmt)))
+		return -EFAULT;
+
+	switch (zmgmt.action) {
+	case BLK_ZONE_MGMT_CLOSE:
+		op = REQ_OP_ZONE_CLOSE;
+		break;
+	case BLK_ZONE_MGMT_FINISH:
+		op = REQ_OP_ZONE_FINISH;
+		break;
+	case BLK_ZONE_MGMT_OPEN:
+		op = REQ_OP_ZONE_OPEN;
+		break;
+	case BLK_ZONE_MGMT_RESET:
+		op = REQ_OP_ZONE_RESET;
+		break;
+	case BLK_ZONE_MGMT_OFFLINE:
+		op = REQ_OP_ZONE_OFFLINE;
+		break;
+	}
+
+	return blkdev_zone_mgmt(bdev, op, zmgmt.sector, zmgmt.nr_sectors,
 				GFP_KERNEL);
 }
 
