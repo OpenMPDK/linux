@@ -374,6 +374,8 @@ int blk_revalidate_disk_zones(struct gendisk *disk,
 
 extern int blkdev_report_zones_ioctl(struct block_device *bdev, fmode_t mode,
 				     unsigned int cmd, unsigned long arg);
+extern int blkdev_zone_ops_ioctl(struct block_device *bdev, fmode_t mode,
+				  unsigned int cmd, unsigned long arg);
 extern int blkdev_zone_mgmt_ioctl(struct block_device *bdev, fmode_t mode,
 				  unsigned int cmd, unsigned long arg);
 
@@ -387,6 +389,13 @@ static inline unsigned int blkdev_nr_zones(struct gendisk *disk)
 static inline int blkdev_report_zones_ioctl(struct block_device *bdev,
 					    fmode_t mode, unsigned int cmd,
 					    unsigned long arg)
+{
+	return -ENOTTY;
+}
+
+static inline int blkdev_zone_ops_ioctl(struct block_device *bdev,
+					 fmode_t mode, unsigned int cmd,
+					 unsigned long arg)
 {
 	return -ENOTTY;
 }
