@@ -612,6 +612,8 @@ static int blkdev_common_ioctl(struct block_device *bdev, fmode_t mode,
 	case BLKOPENZONE:
 	case BLKCLOSEZONE:
 	case BLKFINISHZONE:
+		return blkdev_zone_ops_ioctl(bdev, mode, cmd, arg);
+	case BLKMGMTZONE:
 		return blkdev_zone_mgmt_ioctl(bdev, mode, cmd, arg);
 	case BLKGETZONESZ:
 		return put_uint(argp, bdev_zone_sectors(bdev));
