@@ -937,6 +937,9 @@ static inline blk_status_t nvme_setup_zmgmt_send(struct nvme_ns *ns,
 	cmnd->zmgmt_send.nsid = cpu_to_le32(ns->head->ns_id);
 	cmnd->zmgmt_send.slba = cpu_to_le64(nvme_block_nr(ns, blk_rq_pos(req)));
 
+	if (bio_op(req->bio) & REQ_ZONE_ALL)
+		cmnd->zmgmt_send.zflags |= NVME_CMD_ZONE_MGMT_SEND_ALL;
+
 	switch (req_op(req)) {
 	case REQ_OP_ZONE_CLOSE:
 		cmnd->zmgmt_send.zsa = NVME_CMD_ZONE_MGMT_SEND_CLOSE;
