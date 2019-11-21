@@ -143,6 +143,10 @@ enum blk_zone_action {
 	BLK_ZONE_MGMT_OFFLINE	= 0x5,
 };
 
+enum blk_zone_mgmt_flags {
+	BLK_ZONE_SELECT_ALL	= 1 << 0,
+};
+
 struct blk_zone_mgmt {
 	__u8		action;
 	__u8		resv3[3];
