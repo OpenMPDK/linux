@@ -1344,8 +1344,6 @@ struct streams_directive_params {
 	__u8	rsvd2[6];
 };
 
-#define NVME_CMD_ZONE_MGMT_SEND_SELECT_ALL(zflags)	((zflags) & 0x1)
-
 #define NVME_ID_NS_ZONE_ZOC_VZC(zoc)			((zoc & 0x1))
 #define NVME_ID_NS_ZONE_ZOC_ZE(zoc)			((zoc >> 1 & 0x1))
 #define NVME_ID_NS_ZONE_ZOC_RAZB(zoc)			((zoc >> 2 & 0x1))
@@ -1359,6 +1357,8 @@ enum {
 	NVME_CMD_ZONE_MGMT_SEND_OFFLINE		= 0x5,
 
 	NVME_CMD_ZONE_MGMT_SEND_SZD		= 0x10,
+
+	NVME_CMD_ZONE_MGMT_SEND_ALL		= 0x1,
 
 	/* Receive */
 	NVME_CMD_ZONE_MGMT_RCV_REPORT_ZONES	= 0x0,
