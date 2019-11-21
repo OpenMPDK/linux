@@ -336,6 +336,7 @@ enum req_flag_bits {
 	 */
 	__REQ_CGROUP_PUNT,
 	__REQ_ZONE_APPEND,	/* zoned device specific write append  */
+	__REQ_ZONE_ALL,		/* apply zone operation to all zones */
 
 	/* command specific flags for REQ_OP_WRITE_ZEROES: */
 	__REQ_NOUNMAP,		/* do not free blocks when zeroing */
@@ -365,6 +366,7 @@ enum req_flag_bits {
 #define REQ_NOWAIT_INLINE	(1ULL << __REQ_NOWAIT_INLINE)
 #define REQ_CGROUP_PUNT		(1ULL << __REQ_CGROUP_PUNT)
 #define REQ_ZONE_APPEND		(1ULL << __REQ_ZONE_APPEND)
+#define REQ_ZONE_ALL		(1ULL << __REQ_ZONE_ALL)
 #define REQ_NOUNMAP		(1ULL << __REQ_NOUNMAP)
 #define REQ_HIPRI		(1ULL << __REQ_HIPRI)
 

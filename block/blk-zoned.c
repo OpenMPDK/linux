@@ -379,6 +379,9 @@ int blkdev_zone_mgmt_ioctl(struct block_device *bdev, fmode_t mode,
 		break;
 	}
 
+	if (zmgmt.flags & BLK_ZONE_SELECT_ALL)
+		op |= REQ_ZONE_ALL;
+
 	return blkdev_zone_mgmt(bdev, op, zmgmt.sector, zmgmt.nr_sectors,
 				GFP_KERNEL);
 }
