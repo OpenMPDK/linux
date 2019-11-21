@@ -133,6 +133,26 @@ struct blk_zone_range {
 };
 
 /**
+ * Block Zone Management
+ */
+enum blk_zone_action {
+	BLK_ZONE_MGMT_CLOSE	= 0x1,
+	BLK_ZONE_MGMT_FINISH	= 0x2,
+	BLK_ZONE_MGMT_OPEN	= 0x3,
+	BLK_ZONE_MGMT_RESET	= 0x4,
+	BLK_ZONE_MGMT_OFFLINE	= 0x5,
+};
+
+struct blk_zone_mgmt {
+	__u8		action;
+	__u8		resv3[3];
+	__u32		flags;
+	__u64		sector;
+	__u64		nr_sectors;
+	__u64		resv31;
+};
+
+/**
  * Zoned block device ioctl's:
  *
  * @BLKREPORTZONE: Get zone information. Takes a zone report as argument.
@@ -157,5 +177,6 @@ struct blk_zone_range {
 #define BLKCLOSEZONE	_IOW(0x12, 135, struct blk_zone_range)
 #define BLKFINISHZONE	_IOW(0x12, 136, struct blk_zone_range)
 #define BLKOFFLINEZONE	_IOW(0x12, 137, struct blk_zone_range)
+#define BLKMGMTZONE	_IOR(0x12, 138, struct blk_zone_mgmt)
 
 #endif /* _UAPI_BLKZONED_H */
