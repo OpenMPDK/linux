@@ -307,9 +307,7 @@ static void nvme_config_zoned(struct gendisk *disk, struct nvme_ns *ns)
 {
 	struct request_queue *queue = disk->queue;
 
-	/* XXX: Provide next power-of-2 for now. This can bring problems */
-	blk_queue_chunk_sectors(queue,
-		1 << get_count_order(ns->zone_secs << (ns->lba_shift - 9)));
+	blk_queue_chunk_sectors(queue, ns->zone_secs << (ns->lba_shift - 9));
 	queue->limits.zoned = BLK_ZONED_HM;
 	queue->nr_zones = ns->nr_zones;
 }
