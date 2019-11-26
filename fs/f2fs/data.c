@@ -1351,7 +1351,8 @@ int f2fs_preallocate_blocks(struct kiocb *iocb, struct iov_iter *from)
 	struct f2fs_map_blocks map;
 	int flag;
 	int err = 0;
-	bool direct_io = iocb->ki_flags & IOCB_DIRECT;
+	bool direct_io = iocb->ki_flags & IOCB_DIRECT &&
+				!f2fs_force_buffered_io(inode, iocb, from);
 
 	map.m_lblk = F2FS_BLK_ALIGN(iocb->ki_pos);
 	map.m_len = F2FS_BYTES_TO_BLK(iocb->ki_pos + iov_iter_count(from));
