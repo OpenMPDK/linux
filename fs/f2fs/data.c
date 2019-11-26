@@ -1178,7 +1178,8 @@ int f2fs_preallocate_blocks(struct kiocb *iocb, struct iov_iter *from)
 	struct f2fs_map_blocks map;
 	int flag;
 	int err = 0;
-	bool direct_io = iocb->ki_flags & IOCB_DIRECT;
+	bool direct_io = iocb->ki_flags & IOCB_DIRECT &&
+				!f2fs_force_buffered_io(inode, iocb, from);
 
 	/* convert inline data for Direct I/O*/
 	if (direct_io) {
