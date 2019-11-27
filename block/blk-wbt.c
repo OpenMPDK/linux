@@ -466,7 +466,8 @@ static inline unsigned int get_limit(struct rq_wb *rwb, unsigned long rw)
 	if (!rwb_enabled(rwb))
 		return UINT_MAX;
 
-	if ((rw & REQ_OP_MASK) == REQ_OP_DISCARD)
+	if ((rw & REQ_OP_MASK) == REQ_OP_DISCARD ||
+				(rw & REQ_OP_MASK) == REQ_OP_ZONE_COMMIT)
 		return rwb->wb_background;
 
 	/*
