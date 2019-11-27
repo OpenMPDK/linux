@@ -414,9 +414,15 @@ struct nvme_ns {
 	u64 nr_zones;
 	bool is_zoned;
 
-	sector_t zrwacg;
+	u32 nar;
+	u32 nor;
+	u32 zal;
+	u32 rrl;
+	u8 zoc;
+
+	u16 zrwacg;	/* in sectors */
+	u32 zrwas;		/* in sectors */
 	u32 mzrwar;
-	u32 zrwas;
 #endif
 };
 
