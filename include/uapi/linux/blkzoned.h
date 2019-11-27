@@ -131,6 +131,16 @@ struct blk_zone_range {
 	__u64		nr_sectors;
 };
 
+struct blk_zone_dev {
+	__u32	mar;
+	__u32	mor;
+	__u32	rrl;
+	__u32	frl;
+	__u8	zoc;
+	__u8	rsv19[7];
+	__u64	rsv63[2];
+};
+
 /**
  * Block Zone Management
  */
@@ -176,6 +186,8 @@ struct blk_zone_mgmt {
 #define BLKCLOSEZONE	_IOW(0x12, 135, struct blk_zone_range)
 #define BLKFINISHZONE	_IOW(0x12, 136, struct blk_zone_range)
 #define BLKOFFLINEZONE	_IOW(0x12, 137, struct blk_zone_range)
+
 #define BLKMGMTZONE	_IOR(0x12, 138, struct blk_zone_mgmt)
+#define	BLKZONEDEVPROP	_IOR(0x12, 139, struct blk_zone_dev)
 
 #endif /* _UAPI_BLKZONED_H */
