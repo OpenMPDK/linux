@@ -376,6 +376,8 @@ extern int blkdev_zone_ops_ioctl(struct block_device *bdev, fmode_t mode,
 				  unsigned int cmd, unsigned long arg);
 extern int blkdev_zone_mgmt_ioctl(struct block_device *bdev, fmode_t mode,
 				  unsigned int cmd, unsigned long arg);
+extern int blkdev_zonedev_prop(struct block_device *bdev, fmode_t mode,
+			unsigned int cmd, unsigned long arg);
 #else /* CONFIG_BLK_DEV_ZONED */
 
 static inline unsigned int blkdev_nr_zones(struct gendisk *disk)
@@ -393,6 +395,12 @@ static inline int blkdev_report_zones_ioctl(struct block_device *bdev,
 static inline int blkdev_zone_mgmt_ioctl(struct block_device *bdev,
 					 fmode_t mode, unsigned int cmd,
 					 unsigned long arg)
+{
+	return -ENOTTY;
+}
+
+static inline int blkdev_zonedev_prop(struct block_device *bdev, fmode_t mode,
+				      unsigned int cmd, unsigned long arg)
 {
 	return -ENOTTY;
 }
@@ -1740,6 +1748,7 @@ struct block_device_operations {
 	void (*swap_slot_free_notify) (struct block_device *, unsigned long);
 	int (*report_zones)(struct gendisk *, sector_t sector,
 			unsigned int nr_zones, report_zones_cb cb, void *data);
+	int (*report_zone_prop)(struct gendisk *, struct blk_zone_dev *zprop);
 	struct module *owner;
 	const struct pr_ops *pr_ops;
 };
