@@ -312,7 +312,8 @@ static void nvme_config_zoned(struct gendisk *disk, struct nvme_ns *ns)
 	queue->nr_zones = ns->nr_zones;
 }
 
-static int nvme_zns_init(struct nvme_ns *ns, struct nvme_id_ns *id)
+static int nvme_zns_init(struct nvme_ns *ns, struct nvme_ctrl *ctrl,
+			 struct nvme_id_ns *id)
 {
 	int ret;
 
@@ -320,6 +321,10 @@ static int nvme_zns_init(struct nvme_ns *ns, struct nvme_id_ns *id)
 	ns->zone_secs = id->zonef[id->fzsze].zs >> ns->lba_shift;
 	ns->zds = id->zonef[id->fzsze].zds <<  6;
 	ns->nr_zones = nvme_zns_nr_zones(ns);
+
+	ns->zrwacg = le16_to_cpu(id->zrwacg);
+	ns->mzrwar = le32_to_cpu(ctrl->mzrwar);
+	ns->zrwas = le32_to_cpu(ctrl->zrwas);
 
 	ns->zones = kvzalloc(ns->nr_zones * sizeof(struct blk_zone), GFP_KERNEL);
 	if (!ns->zones)
@@ -940,16 +945,50 @@ static inline blk_status_t nvme_setup_rw(struct nvme_ns *ns,
 	return 0;
 }
 
+static inline blk_status_t nvme_setup_zone_commit(struct nvme_ns *ns,
+						  struct request *req,
+						  struct nvme_command *cmnd)
+{
+	struct bio *bio;
+	unsigned short segments = blk_rq_nr_discard_segments(req), n = 0;
+	u64 *elba_list;
+
+	elba_list = kmalloc_array(segments, sizeof(u64),
+					GFP_ATOMIC | __GFP_NOWARN);
+	if (!elba_list)
+		return BLK_STS_RESOURCE;
+
+	__rq_for_each_bio(bio, req) {
+		u64 elba = (bio->bi_iter.bi_sector >> (ns->lba_shift - 9));
+
+		if (n < segments)
+			elba_list[n++] = cpu_to_le64(elba);
+	}
+
+	cmnd->zmgmt_send.zsa = NVME_CMD_ZONE_MGMT_SEND_COMMIT;
+	cmnd->common.cdw12 = cpu_to_le32(segments - 1);
+
+	req->special_vec.bv_page = virt_to_page(elba_list);
+	req->special_vec.bv_offset = offset_in_page(elba_list);
+	req->special_vec.bv_len = sizeof(u64) * segments;
+	req->rq_flags |= RQF_SPECIAL_PAYLOAD;
+
+	return BLK_STS_OK;
+}
+
 static inline blk_status_t nvme_setup_zmgmt_send(struct nvme_ns *ns,
 						 struct request *req,
 						 struct nvme_command *cmnd)
 {
+	struct bio *bio = req->bio;
+	blk_status_t ret = BLK_STS_OK;
+
 	cmnd->zmgmt_send.opcode = nvme_cmd_zns_mgmt_send;
 	cmnd->zmgmt_send.nsid = cpu_to_le32(ns->head->ns_id);
 	cmnd->zmgmt_send.slba =
 			cpu_to_le64(blk_rq_pos(req) >> (ns->lba_shift - 9));
 
-	if (bio_op(req->bio) & REQ_ZONE_ALL)
+	if (bio->bi_opf & REQ_ZONE_ALL)
 		cmnd->zmgmt_send.zflags |= NVME_CMD_ZONE_MGMT_SEND_ALL;
 
 	switch (req_op(req)) {
@@ -961,6 +1000,8 @@ static inline blk_status_t nvme_setup_zmgmt_send(struct nvme_ns *ns,
 		break;
 	case REQ_OP_ZONE_OPEN:
 		cmnd->zmgmt_send.zsa = NVME_CMD_ZONE_MGMT_SEND_OPEN;
+		if (bio->bi_opf & REQ_ZONE_ZRWA)
+			cmnd->zmgmt_send.zflags |= NVME_CMD_ZONE_MGMT_SEND_ZRWA;
 		break;
 	case REQ_OP_ZONE_RESET:
 		cmnd->zmgmt_send.zsa = NVME_CMD_ZONE_MGMT_SEND_RESET;
@@ -968,12 +1009,15 @@ static inline blk_status_t nvme_setup_zmgmt_send(struct nvme_ns *ns,
 	case REQ_OP_ZONE_OFFLINE:
 		cmnd->zmgmt_send.zsa = NVME_CMD_ZONE_MGMT_SEND_OFFLINE;
 		break;
+	case REQ_OP_ZONE_COMMIT:
+		ret = nvme_setup_zone_commit(ns, req, cmnd);
+		break;
 	default:
 		WARN_ON_ONCE(1);
-		return BLK_STS_IOERR;
+		ret = BLK_STS_IOERR;
 	}
 
-	return BLK_STS_OK;
+	return ret;
 }
 
 void nvme_cleanup_cmd(struct request *req)
@@ -1021,6 +1065,7 @@ blk_status_t nvme_setup_cmd(struct nvme_ns *ns, struct request *req,
 	case REQ_OP_ZONE_OPEN:
 	case REQ_OP_ZONE_RESET:
 	case REQ_OP_ZONE_OFFLINE:
+	case REQ_OP_ZONE_COMMIT:
 		ret = nvme_setup_zmgmt_send(ns, req, cmd);
 		break;
 	default:
@@ -3156,6 +3201,9 @@ int nvme_init_identify(struct nvme_ctrl *ctrl)
 	ctrl->max_hw_sectors =
 		min_not_zero(ctrl->max_hw_sectors, max_hw_sectors);
 #ifdef CONFIG_BLK_DEV_ZONED
+	ctrl->mzrwar = le32_to_cpu(id->mzrwar);
+	ctrl->zrwas = le32_to_cpu(id->zrwas);
+
 	if (id->zamds)
 		ctrl->max_zone_append_sectors =
 			1 << (id->zamds + page_shift - 9);
@@ -3905,7 +3953,8 @@ static int nvme_alloc_ns(struct nvme_ctrl *ctrl, unsigned nsid, u8 nstype)
 #ifdef CONFIG_BLK_DEV_ZONED
 	/* Identify ZNS by looking at specific parameters for now */
 	if (id->zonef[id->fzsze].zs > 0) {
-		ret = nvme_zns_init(ns, id);
+		/* XXX: Need to pass ctrl given current TP. This will change */
+		ret = nvme_zns_init(ns, ctrl, id);
 		if (ret) {
 			dev_warn(ctrl->device, "ZNS init failure\n");
 			goto out_put_disk;
