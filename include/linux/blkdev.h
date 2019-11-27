@@ -1003,7 +1003,8 @@ static inline struct bio_vec req_bvec(struct request *rq)
 static inline unsigned int blk_queue_get_max_sectors(struct request_queue *q,
 						     int op)
 {
-	if (unlikely(op == REQ_OP_DISCARD || op == REQ_OP_SECURE_ERASE))
+	if (unlikely(op == REQ_OP_DISCARD || op == REQ_OP_SECURE_ERASE ||
+				op == REQ_OP_ZONE_COMMIT))
 		return min(q->limits.max_discard_sectors,
 			   UINT_MAX >> SECTOR_SHIFT);
 
@@ -1051,6 +1052,7 @@ static inline unsigned int blk_rq_get_max_sectors(struct request *rq,
 
 	if (!q->limits.chunk_sectors ||
 	    req_op(rq) == REQ_OP_DISCARD ||
+	    req_op(rq) == REQ_OP_ZONE_COMMIT ||
 	    req_op(rq) == REQ_OP_SECURE_ERASE)
 		return blk_queue_get_max_sectors(q, req_op(rq));
 

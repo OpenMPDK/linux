@@ -143,41 +143,53 @@ static inline bool blkdev_allow_reset_all_zones(struct block_device *bdev,
 	return !sector && nr_sectors == get_capacity(bdev->bd_disk);
 }
 
-/**
- * blkdev_zone_mgmt - Execute a zone management operation on a range of zones
- * @bdev:	Target block device
- * @op:		Operation to be performed on the zones
- * @sector:	Start sector of the first zone to operate on
- * @nr_sectors:	Number of sectors, should be at least the length of one zone and
- *		must be zone size aligned.
- * @gfp_mask:	Memory allocation flags (for bio_alloc)
- *
- * Description:
- *    Perform the specified operation on the range of zones specified by
- *    @sector..@sector+@nr_sectors. Specifying the entire disk sector range
- *    is valid, but the specified range should not contain conventional zones.
- *    The operation to execute on each zone can be a zone reset, open, close
- *    or finish request.
- */
-int blkdev_zone_mgmt(struct block_device *bdev, enum req_opf op,
-		     sector_t sector, sector_t nr_sectors,
-		     gfp_t gfp_mask)
+int blkdev_zone_commit(struct block_device *bdev, int op,
+		       void __user *ubuf, sector_t nr_sectors,
+		       gfp_t gfp_mask)
+{
+	struct blk_plug plug;
+	struct bio *bio = NULL;
+	u64 *elba_list;
+	int ret, i;
+
+	elba_list = kmalloc_array(nr_sectors, sizeof(u64), GFP_KERNEL);
+	if (!elba_list)
+		return -ENOMEM;
+
+	if (copy_from_user(elba_list, ubuf, sizeof(u64) * nr_sectors))
+		return -EFAULT;
+
+	blk_start_plug(&plug);
+	for (i = 0; i < nr_sectors; i++) {
+		bio = blk_next_bio(bio, 0, gfp_mask);
+		bio->bi_iter.bi_sector = elba_list[i];
+		bio_set_dev(bio, bdev);
+		bio->bi_opf = op;
+
+		bio->bi_iter.bi_size = 1 << 9;
+
+		/* This may take a while, so be nice to others */
+		cond_resched();
+	}
+
+	ret = submit_bio_wait(bio);
+	bio_put(bio);
+	blk_finish_plug(&plug);
+
+	kfree(elba_list);
+	return ret;
+}
+
+int __blkdev_zone_mgmt(struct block_device *bdev, enum req_opf op,
+		       sector_t sector, sector_t nr_sectors,
+		       gfp_t gfp_mask)
 {
 	struct request_queue *q = bdev_get_queue(bdev);
+	struct bio *bio = NULL;
 	sector_t zone_sectors = blk_queue_zone_sectors(q);
 	sector_t capacity = get_capacity(bdev->bd_disk);
 	sector_t end_sector = sector + nr_sectors;
-	struct bio *bio = NULL;
-	int ret;
-
-	if (!blk_queue_is_zoned(q))
-		return -EOPNOTSUPP;
-
-	if (bdev_read_only(bdev))
-		return -EPERM;
-
-	if (!op_is_zone_mgmt(op))
-		return -EOPNOTSUPP;
+	int ret = 0;
 
 	if (!nr_sectors || end_sector > capacity)
 		/* Out of range */
@@ -217,6 +229,45 @@ int blkdev_zone_mgmt(struct block_device *bdev, enum req_opf op,
 	bio_put(bio);
 
 	return ret;
+}
+
+/**
+ * blkdev_zone_mgmt - Execute a zone management operation on a range of zones
+ * @bdev:	Target block device
+ * @op:		Operation to be performed on the zones
+ * @sector:	Start sector of the first zone to operate on
+ * @nr_sectors:	Number of sectors, should be at least the length of one zone and
+ *		must be zone size aligned.
+ * @gfp_mask:	Memory allocation flags (for bio_alloc)
+ *
+ * Description:
+ *    Perform the specified operation on the range of zones specified by
+ *    @sector..@sector+@nr_sectors. Specifying the entire disk sector range
+ *    is valid, but the specified range should not contain conventional zones.
+ *    The operation to execute on each zone can be a zone reset, open, close
+ *    or finish request.
+ */
+int blkdev_zone_mgmt(struct block_device *bdev, enum req_opf op,
+		     sector_t sector, sector_t nr_sectors,
+		     gfp_t gfp_mask)
+{
+	struct request_queue *q = bdev_get_queue(bdev);
+
+	if (!blk_queue_is_zoned(q))
+		return -EOPNOTSUPP;
+
+	if (bdev_read_only(bdev))
+		return -EPERM;
+
+	if (!op_is_zone_mgmt(op))
+		return -EOPNOTSUPP;
+
+	if (op == REQ_OP_ZONE_COMMIT)
+		return blkdev_zone_commit(bdev, op, (void __user *)sector,
+							nr_sectors, gfp_mask);
+
+	return __blkdev_zone_mgmt(bdev, op, sector, nr_sectors, gfp_mask);
+
 }
 EXPORT_SYMBOL_GPL(blkdev_zone_mgmt);
 
@@ -340,7 +391,7 @@ int blkdev_zone_mgmt_ioctl(struct block_device *bdev, fmode_t mode,
 	void __user *argp = (void __user *)arg;
 	struct request_queue *q;
 	struct blk_zone_mgmt zmgmt;
-	enum req_opf op;
+	int op = 0;
 
 	if (!argp)
 		return -EINVAL;
@@ -370,12 +421,17 @@ int blkdev_zone_mgmt_ioctl(struct block_device *bdev, fmode_t mode,
 		break;
 	case BLK_ZONE_MGMT_OPEN:
 		op = REQ_OP_ZONE_OPEN;
+		if (zmgmt.flags & BLK_ZONE_RWA)
+			op |= REQ_ZONE_ZRWA;
 		break;
 	case BLK_ZONE_MGMT_RESET:
 		op = REQ_OP_ZONE_RESET;
 		break;
 	case BLK_ZONE_MGMT_OFFLINE:
 		op = REQ_OP_ZONE_OFFLINE;
+		break;
+	case BLK_ZONE_MGMT_COMMIT:
+		op = REQ_OP_ZONE_COMMIT;
 		break;
 	}
 

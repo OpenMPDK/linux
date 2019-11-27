@@ -288,7 +288,9 @@ struct nvme_id_ctrl {
 	__u8			rsvd535;
 	__le32			sgls;
 	__le32			mnan;
-	__u8			rsvd544[224];
+	__le32			mzrwar;
+	__le32			zrwas;
+	__u8			rsvd536[216];
 	char			subnqn[256];
 	__u8			rsvd1024[768];
 	__le32			ioccsz;
@@ -378,7 +380,8 @@ struct nvme_id_ns {
 	__u8			rsvd272[13];
 	__u32			nar;
 	__u32			nor;
-	__u8			rsvd288[8];
+	__u16			zrwacg;
+	__u8			rsvd282[6];
 	__u32			zal;
 	__u32			rrl;
 	__u8			rsvd3776[3480];
@@ -1143,12 +1146,14 @@ enum {
 
 #define NVME_ZONE_ZA_ZFC(za)		((za) & (0x1 << 0))
 #define NVME_ZONE_ZA_ZFR(za)		((za) & (0x1 << 1))
+#define NVME_ZONE_ZA_ZRWA(za)		((za) & (0x1 << 4))
 #define NVME_ZONE_ZA_RZR(za)		((za) & (0x1 << 5))
 #define NVME_ZONE_ZA_ZDV(za)		((za) & (0x1 << 6))
 
 enum {
 	NVME_ZONE_ZA_ZFC	= 1 << 0,
 	NVME_ZONE_ZA_ZFR	= 1 << 1,
+	NVME_ZONE_ZA_ZRWA	= 1 << 4,
 	NVME_ZONE_ZA_RZR	= 1 << 5,
 	NVME_ZONE_ZA_ZDV	= 1 << 6,
 };
@@ -1357,8 +1362,10 @@ enum {
 	NVME_CMD_ZONE_MGMT_SEND_OFFLINE		= 0x5,
 
 	NVME_CMD_ZONE_MGMT_SEND_SZD		= 0x10,
+	NVME_CMD_ZONE_MGMT_SEND_COMMIT		= 0x11,
 
 	NVME_CMD_ZONE_MGMT_SEND_ALL		= 0x1,
+	NVME_CMD_ZONE_MGMT_SEND_ZRWA		= 0x2,
 
 	/* Receive */
 	NVME_CMD_ZONE_MGMT_RCV_REPORT_ZONES	= 0x0,
