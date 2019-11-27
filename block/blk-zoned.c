@@ -128,6 +128,17 @@ int blkdev_report_zones(struct block_device *bdev, sector_t sector,
 }
 EXPORT_SYMBOL_GPL(blkdev_report_zones);
 
+static int blkdev_report_zonedev_prop(struct block_device *bdev,
+				      struct blk_zone_dev *zprop)
+{
+	struct gendisk *disk = bdev->bd_disk;
+
+	if (WARN_ON_ONCE(!bdev->bd_disk->fops->report_zone_prop))
+		return -EOPNOTSUPP;
+
+	return disk->fops->report_zone_prop(disk, zprop);
+}
+
 static inline bool blkdev_allow_reset_all_zones(struct block_device *bdev,
 						sector_t sector,
 						sector_t nr_sectors)
@@ -440,6 +451,41 @@ int blkdev_zone_mgmt_ioctl(struct block_device *bdev, fmode_t mode,
 
 	return blkdev_zone_mgmt(bdev, op, zmgmt.sector, zmgmt.nr_sectors,
 				GFP_KERNEL);
+}
+
+int blkdev_zonedev_prop(struct block_device *bdev, fmode_t mode,
+			unsigned int cmd, unsigned long arg)
+{
+	void __user *argp = (void __user *)arg;
+	struct request_queue *q;
+	struct blk_zone_dev zprop;
+	int ret;
+
+	if (!argp)
+		return -EINVAL;
+
+	q = bdev_get_queue(bdev);
+	if (!q)
+		return -ENXIO;
+
+	if (!blk_queue_is_zoned(q))
+		return -ENOTTY;
+
+	if (!capable(CAP_SYS_ADMIN))
+		return -EACCES;
+
+	if (!(mode & FMODE_WRITE))
+		return -EBADF;
+
+	ret = blkdev_report_zonedev_prop(bdev, &zprop);
+	if (ret)
+		goto out;
+
+	if (copy_to_user(argp, &zprop, sizeof(struct blk_zone_dev)))
+		return -EFAULT;
+
+out:
+	return ret;
 }
 
 static inline unsigned long *blk_alloc_zone_bitmap(int node,
