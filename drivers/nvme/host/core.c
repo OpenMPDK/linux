@@ -303,6 +303,23 @@ static int nvme_zns_zone_report(struct gendisk *disk, sector_t sector,
 	return 0;
 }
 
+static int nvme_zns_report_prop(struct gendisk *disk,
+				struct blk_zone_dev *zprop)
+{
+	struct nvme_ns *ns = disk->private_data;
+
+	zprop->nar = ns->nar;
+	zprop->nor = ns->nor;
+	zprop->zal = ns->zal;
+	zprop->rrl = ns->rrl;
+	zprop->zoc = ns->zoc;
+	zprop->zrwas = ns->zrwas;
+	zprop->mzrwar = ns->mzrwar;
+	zprop->zrwacg = ns->zrwacg;
+
+	return 0;
+}
+
 static void nvme_config_zoned(struct gendisk *disk, struct nvme_ns *ns)
 {
 	struct request_queue *queue = disk->queue;
@@ -322,9 +339,15 @@ static int nvme_zns_init(struct nvme_ns *ns, struct nvme_ctrl *ctrl,
 	ns->zds = id->zonef[id->fzsze].zds <<  6;
 	ns->nr_zones = nvme_zns_nr_zones(ns);
 
-	ns->zrwacg = le16_to_cpu(id->zrwacg);
+	ns->nar = le32_to_cpu(id->nar);
+	ns->nor = le32_to_cpu(id->nor);
+	ns->zal = le32_to_cpu(id->zal);
+	ns->rrl = le32_to_cpu(id->rrl);
+	ns->zoc = id->zoc;
+
+	ns->zrwacg = (le16_to_cpu(id->zrwacg) + 1) << (ns->lba_shift - 9);
 	ns->mzrwar = le32_to_cpu(ctrl->mzrwar);
-	ns->zrwas = le32_to_cpu(ctrl->zrwas);
+	ns->zrwas = le32_to_cpu(ctrl->zrwas) >> 9;
 
 	ns->zones = kvzalloc(ns->nr_zones * sizeof(struct blk_zone), GFP_KERNEL);
 	if (!ns->zones)
@@ -352,12 +375,21 @@ static void nvme_zns_exit(struct nvme_ns *ns)
 {
 	kvfree(ns->zones);
 }
+
 #else
+
 static int nvme_zns_zone_report(struct gendisk *disk, sector_t sector,
 				struct blk_zone *zones, unsigned int *nr_zones)
 {
 	return -ENOTSUPP;
 }
+
+static int nvme_zns_report_prop(struct gendisk *disk,
+				struct blk_zone_dev *zprop)
+{
+	return -ENOTSUPP;
+}
+
 #endif
 
 static void nvme_do_delete_ctrl(struct nvme_ctrl *ctrl)
@@ -2344,15 +2376,16 @@ EXPORT_SYMBOL_GPL(nvme_sec_submit);
 #endif /* CONFIG_BLK_SED_OPAL */
 
 static const struct block_device_operations nvme_fops = {
-	.owner		= THIS_MODULE,
-	.ioctl		= nvme_ioctl,
-	.compat_ioctl	= nvme_ioctl,
-	.open		= nvme_open,
-	.release	= nvme_release,
-	.getgeo		= nvme_getgeo,
-	.revalidate_disk= nvme_revalidate_disk,
-	.pr_ops		= &nvme_pr_ops,
-	.report_zones	= nvme_zns_zone_report,
+	.owner			= THIS_MODULE,
+	.ioctl			= nvme_ioctl,
+	.compat_ioctl		= nvme_ioctl,
+	.open			= nvme_open,
+	.release		= nvme_release,
+	.getgeo			= nvme_getgeo,
+	.revalidate_disk	= nvme_revalidate_disk,
+	.pr_ops			= &nvme_pr_ops,
+	.report_zones		= nvme_zns_zone_report,
+	.report_zone_prop	= nvme_zns_report_prop,
 };
 
 #ifdef CONFIG_NVME_MULTIPATH
