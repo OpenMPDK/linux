@@ -281,12 +281,6 @@ struct nvme_ctrl {
 	struct work_struct ana_work;
 #endif
 
-/* Only keep this here temporarily as values are moved to NS in TP */
-#ifdef CONFIG_BLK_DEV_ZONED
-	u32 mzrwar;
-	u32 zrwas;
-#endif
-
 	/* Power saving configuration */
 	u64 ps_max_latency_us;
 	bool apst_enabled;

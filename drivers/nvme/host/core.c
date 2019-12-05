@@ -345,9 +345,9 @@ static int nvme_zns_init(struct nvme_ns *ns, struct nvme_ctrl *ctrl,
 	ns->rrl = le32_to_cpu(id->rrl);
 	ns->zoc = id->zoc;
 
-	ns->zrwacg = (le16_to_cpu(id->zrwacg) + 1) << (ns->lba_shift - 9);
-	ns->mzrwar = le32_to_cpu(ctrl->mzrwar);
-	ns->zrwas = le32_to_cpu(ctrl->zrwas) >> 9;
+	ns->zrwacg = (le32_to_cpu(id->zrwacg) + 1) << (ns->lba_shift - 9);
+	ns->mzrwar = le32_to_cpu(id->mzrwar);
+	ns->zrwas = le32_to_cpu(id->zrwas) >> 9;
 
 	ns->zones = kvzalloc(ns->nr_zones * sizeof(struct blk_zone), GFP_KERNEL);
 	if (!ns->zones)
@@ -3234,9 +3234,6 @@ int nvme_init_identify(struct nvme_ctrl *ctrl)
 	ctrl->max_hw_sectors =
 		min_not_zero(ctrl->max_hw_sectors, max_hw_sectors);
 #ifdef CONFIG_BLK_DEV_ZONED
-	ctrl->mzrwar = le32_to_cpu(id->mzrwar);
-	ctrl->zrwas = le32_to_cpu(id->zrwas);
-
 	if (id->zamds)
 		ctrl->max_zone_append_sectors =
 			1 << (id->zamds + page_shift - 9);
