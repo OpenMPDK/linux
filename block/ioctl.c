@@ -204,6 +204,41 @@ static int blk_ioctl_discard(struct block_device *bdev, fmode_t mode,
 				    GFP_KERNEL, flags);
 }
 
+static int blk_ioctl_copy(struct block_device *bdev, fmode_t mode,
+		unsigned long arg, unsigned long flags)
+{
+	struct copy_range crange;
+	struct range_entry *rlist;
+	struct request_queue *q = bdev_get_queue(bdev);
+	int ret;
+
+	if (!(mode & FMODE_WRITE))
+		return -EBADF;
+
+	if (!blk_queue_copy(q))
+		return -EOPNOTSUPP;
+
+	if (copy_from_user(&crange, (void __user *)arg, sizeof(crange)))
+		return -EFAULT;
+
+	rlist = kmalloc_array(crange.nr_range, sizeof(*rlist),
+			GFP_ATOMIC | __GFP_NOWARN);
+
+	if (!rlist)
+		return -ENOMEM;
+
+	if (copy_from_user(rlist, (void __user *)crange.range_list,
+				sizeof(*rlist) * crange.nr_range))
+		ret = -EFAULT;
+
+	//TODO Limit checks
+
+	ret =  blkdev_issue_copy(bdev, crange.dest, crange.nr_range,
+			rlist, GFP_KERNEL, flags);
+
+	kfree(rlist);
+	return ret;
+}
 static int blk_ioctl_zeroout(struct block_device *bdev, fmode_t mode,
 		unsigned long arg)
 {
@@ -500,6 +535,8 @@ int blkdev_ioctl(struct block_device *bdev, fmode_t mode, unsigned cmd,
 	case BLKSECDISCARD:
 		return blk_ioctl_discard(bdev, mode, arg,
 				BLKDEV_DISCARD_SECURE);
+	case BLKCOPY:
+		return blk_ioctl_copy(bdev, mode, arg, 0);
 	case BLKZEROOUT:
 		return blk_ioctl_zeroout(bdev, mode, arg);
 	case BLKREPORTZONE:

@@ -116,6 +116,95 @@ int blkdev_issue_discard(struct block_device *bdev, sector_t sector,
 }
 EXPORT_SYMBOL(blkdev_issue_discard);
 
+int __blkdev_issue_copy(struct block_device *bdev, sector_t dest,
+		sector_t nr_srcs, struct range_entry *rlist, gfp_t gfp_mask,
+		int flags, struct bio **biop)
+{
+	struct request_queue *q = bdev_get_queue(bdev);
+	struct bio *bio = *biop;
+	unsigned int op;
+	sector_t bs_mask;
+	sector_t src_sects, len;
+	int i;
+
+	if (!q)
+		return -ENXIO;
+
+	if (bdev_read_only(bdev))
+		return -EPERM;
+
+	if (!blk_queue_copy(q))
+		return -EOPNOTSUPP;
+	op = REQ_OP_COPY;
+
+	bs_mask = (bdev_logical_block_size(bdev) >> 9) - 1;
+	if (dest & bs_mask)
+		return -EINVAL;
+
+	if (!nr_srcs)
+		return -EINVAL;
+
+	bio = blk_next_bio(bio, 0, gfp_mask);
+	bio->bi_iter.bi_sector = dest;
+	bio->bi_iter.bi_size = nr_srcs;
+	bio_set_dev(bio, bdev);
+	bio_set_op_attrs(bio, op, 0);
+
+	for (i = 0; i < nr_srcs; i++) {
+		src_sects = rlist[i].src;
+		if (src_sects & bs_mask)
+			return -EINVAL;
+		len = rlist[i].len;
+
+		WARN_ON_ONCE((src_sects << 9) > UINT_MAX);
+
+		bio = blk_next_bio(bio, 0, gfp_mask);
+		bio->bi_iter.bi_sector = src_sects;
+		bio->bi_iter.bi_size = len;
+		bio_set_dev(bio, bdev);
+		bio_set_op_attrs(bio, op, 0);
+	}
+
+	*biop = bio;
+	return 0;
+}
+EXPORT_SYMBOL(__blkdev_issue_copy);
+
+/**
+ * blkdev_issue_copy - queue a copy
+ * @bdev:       blockdev to issue copy for
+ * @dest:	dest sector
+ * @nr_srcs:	number of source ranges to copy
+ * @rlist:	list of range entries
+ * @gfp_mask:   memory allocation flags (for bio_alloc)
+ * @flags:      BLKDEV_COPY_* flags to control behaviour	//TODO
+ *
+ * Description:
+ *    Issue a copy request for dest sector with source in rlist
+ */
+int blkdev_issue_copy(struct block_device *bdev, sector_t dest,
+		int nr_srcs, struct range_entry *rlist,
+		gfp_t gfp_mask, unsigned long flags)
+{
+	struct bio *bio = NULL;
+	struct blk_plug plug;
+	int ret;
+
+	blk_start_plug(&plug);
+	ret = __blkdev_issue_copy(bdev, dest, nr_srcs, rlist, gfp_mask, flags,
+			&bio);
+	if (!ret && bio) {
+		ret = submit_bio_wait(bio);
+		if (ret == -EOPNOTSUPP)
+			ret = 0;
+		bio_put(bio);
+	}
+	blk_finish_plug(&plug);
+
+	return ret;
+}
+EXPORT_SYMBOL(blkdev_issue_copy);
+
 /**
  * __blkdev_issue_write_same - generate number of bios with same page
  * @bdev:	target blockdev
