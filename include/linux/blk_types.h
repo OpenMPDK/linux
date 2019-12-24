@@ -301,6 +301,8 @@ enum req_opf {
 	REQ_OP_ZONE_OFFLINE	= 13,
 	/* Commit buffered data in zone */
 	REQ_OP_ZONE_COMMIT	= 14,
+	/* copy ranges within device */
+	REQ_OP_COPY		= 16,
 
 	/* SCSI passthrough using struct scsi_request */
 	REQ_OP_SCSI_IN		= 32,
@@ -432,6 +434,11 @@ static inline bool op_is_sync(unsigned int op)
 static inline bool op_is_discard(unsigned int op)
 {
 	return (op & REQ_OP_MASK) == REQ_OP_DISCARD;
+}
+
+static inline bool op_is_copy(unsigned int op)
+{
+	return (op & REQ_OP_MASK) == REQ_OP_COPY;
 }
 
 /*

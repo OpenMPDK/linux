@@ -841,6 +841,95 @@ static inline void nvme_setup_flush(struct nvme_ns *ns,
 	cmnd->common.nsid = cpu_to_le32(ns->head->ns_id);
 }
 
+static inline blk_status_t nvme_setup_copy(struct nvme_ns *ns,
+	       struct request *req, struct nvme_command *cmnd)
+{
+	struct nvme_ctrl *ctrl = ns->ctrl;
+	struct nvme_copy_range *range = NULL;
+	struct bio *bio;
+	u16 control = 0;
+	u32 dsmgmt = 0;
+	int nr_range = 0, copied = 0;
+	u16 ssrl;
+	u64 slba;
+	bool first = true;
+	unsigned short segments;
+
+	/* max nr of ranges cannot be more than a byte  */
+	segments = (req->bio->bi_iter.bi_size & 0xFF);
+
+	if (req->cmd_flags & REQ_FUA)
+		control |= NVME_RW_FUA;
+
+	if (req->cmd_flags & REQ_FAILFAST_DEV)
+		control |= NVME_RW_LR;
+
+	cmnd->copy.opcode = nvme_cmd_copy;
+	cmnd->copy.nsid = cpu_to_le32(ns->head->ns_id);
+	cmnd->copy.sdlba = cpu_to_le64(blk_rq_pos(req) >> (ns->lba_shift - 9));
+
+	range = kmalloc_array(segments, sizeof(*range),
+			GFP_ATOMIC | __GFP_NOWARN);
+	if (!range)
+		return BLK_STS_RESOURCE;
+
+	__rq_for_each_bio(bio, req) {
+		if (first) {
+			first = false;
+			continue;
+		}
+
+		slba = bio->bi_iter.bi_sector >> (ns->lba_shift - 9);
+		if (bio->bi_iter.bi_size & ((1 << (ns->lba_shift - 9)) - 1)) {
+			dev_warn(ctrl->device, "range should be block size aligned\n");
+			goto out;
+		}
+
+		ssrl = bio->bi_iter.bi_size >> (ns->lba_shift - 9);
+		if (ssrl > ns->mssrl) {
+			dev_warn(ctrl->device, "invalid ssrl\n");
+			goto out;
+		}
+
+		if (copied > ns->mcl) {
+			dev_warn(ctrl->device, "can't copy more than [%u] lba\n",
+					ns->mcl);
+			goto out;
+		}
+
+		range[nr_range].slba = cpu_to_le64(slba);
+		range[nr_range].nlb = cpu_to_le16(ssrl - 1);
+
+		copied += ssrl;
+		nr_range++;
+	}
+
+	if (nr_range - 1 > ns->msrc) {
+		dev_warn(ctrl->device, "nr_range is greater than msrc\n");
+		goto out;
+	}
+
+	cmnd->copy.nr_range = nr_range - 1;
+
+	req->special_vec.bv_page = virt_to_page(range);
+	req->special_vec.bv_offset = offset_in_page(range);
+	req->special_vec.bv_len = sizeof(*range) * nr_range;
+	req->rq_flags |= RQF_SPECIAL_PAYLOAD;
+
+	if (ctrl->nr_streams)
+		nvme_assign_write_stream(ctrl, req, &control, &dsmgmt);
+
+	//TODO end-to-end
+
+	cmnd->rw.control = cpu_to_le16(control);
+	cmnd->rw.dsmgmt = cpu_to_le32(dsmgmt);
+
+	return BLK_STS_OK;
+out:
+	kfree(range);
+	return BLK_STS_IOERR;
+}
+
 static blk_status_t nvme_setup_discard(struct nvme_ns *ns, struct request *req,
 		struct nvme_command *cmnd)
 {
@@ -1087,6 +1176,9 @@ blk_status_t nvme_setup_cmd(struct nvme_ns *ns, struct request *req,
 		break;
 	case REQ_OP_DISCARD:
 		ret = nvme_setup_discard(ns, req, cmd);
+		break;
+	case REQ_OP_COPY:
+		ret = nvme_setup_copy(ns, req, cmd);
 		break;
 	case REQ_OP_READ:
 	case REQ_OP_WRITE:
@@ -2020,6 +2112,26 @@ static void nvme_config_discard(struct gendisk *disk, struct nvme_ns *ns)
 		blk_queue_max_write_zeroes_sectors(queue, UINT_MAX);
 }
 
+static void nvme_config_copy(struct gendisk *disk, struct nvme_ns *ns,
+				       struct nvme_id_ns *id)
+{
+	struct nvme_ctrl *ctrl = ns->ctrl;
+	struct request_queue *queue = disk->queue;
+
+	if (!(ctrl->oncs & NVME_CTRL_ONCS_COPY)) {
+		blk_queue_flag_clear(QUEUE_FLAG_COPY, queue);
+		return;
+	}
+
+	/* setting copy limits */
+	ns->mcl = le64_to_cpu(id->mcl);
+	ns->mssrl = le32_to_cpu(id->mssrl);
+	ns->msrc = id->msrc;
+
+	if (blk_queue_flag_test_and_set(QUEUE_FLAG_COPY, queue))
+		return;
+}
+
 static void nvme_config_write_zeroes(struct gendisk *disk, struct nvme_ns *ns)
 {
 	u64 max_blocks;
@@ -2141,6 +2253,7 @@ static void nvme_update_disk_info(struct gendisk *disk,
 	set_capacity(disk, capacity);
 
 	nvme_config_discard(disk, ns);
+	nvme_config_copy(disk, ns, id);
 	nvme_config_write_zeroes(disk, ns);
 
 #ifdef CONFIG_BLK_DEV_ZONED
@@ -3224,6 +3337,7 @@ int nvme_init_identify(struct nvme_ctrl *ctrl)
 	ctrl->oaes = le32_to_cpu(id->oaes);
 	ctrl->wctemp = le16_to_cpu(id->wctemp);
 	ctrl->cctemp = le16_to_cpu(id->cctemp);
+	ctrl->ocfs = le32_to_cpu(id->ocfs);
 
 	atomic_set(&ctrl->abort_limit, id->acl + 1);
 	ctrl->vwc = id->vwc;
@@ -4701,6 +4815,7 @@ static inline void _nvme_check_size(void)
 	BUILD_BUG_ON(sizeof(struct nvme_download_firmware) != 64);
 	BUILD_BUG_ON(sizeof(struct nvme_format_cmd) != 64);
 	BUILD_BUG_ON(sizeof(struct nvme_dsm_cmd) != 64);
+	BUILD_BUG_ON(sizeof(struct nvme_copy_command) != 64);
 	BUILD_BUG_ON(sizeof(struct nvme_write_zeroes_cmd) != 64);
 	BUILD_BUG_ON(sizeof(struct nvme_abort_cmd) != 64);
 	BUILD_BUG_ON(sizeof(struct nvme_get_log_page_command) != 64);
