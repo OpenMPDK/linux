@@ -286,6 +286,7 @@ struct nvme_ctrl {
 	u8 vwc;
 	u32 vs;
 	u32 sgls;
+	u16 ocfs;
 	u16 kas;
 	u8 npss;
 	u8 apsta;
@@ -440,6 +441,9 @@ struct nvme_ns {
 	u16 ms;
 	u16 sgs;
 	u32 sws;
+	u32 mcl;
+	u16 mssrl;
+	u8 msrc;
 	u8 pi_type;
 #ifdef CONFIG_BLK_DEV_ZONED
 	u64 zsze;

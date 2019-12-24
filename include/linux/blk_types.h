@@ -345,6 +345,8 @@ enum req_opf {
 	REQ_OP_ZONE_RESET	= 15,
 	/* reset all the zone present on the device */
 	REQ_OP_ZONE_RESET_ALL	= 17,
+	/* copy ranges within device */
+	REQ_OP_COPY		= 19,
 
 	/* SCSI passthrough using struct scsi_request */
 	REQ_OP_SCSI_IN		= 32,
@@ -470,6 +472,11 @@ static inline bool op_is_sync(unsigned int op)
 static inline bool op_is_discard(unsigned int op)
 {
 	return (op & REQ_OP_MASK) == REQ_OP_DISCARD;
+}
+
+static inline bool op_is_copy(unsigned int op)
+{
+	return (op & REQ_OP_MASK) == REQ_OP_COPY;
 }
 
 /*
