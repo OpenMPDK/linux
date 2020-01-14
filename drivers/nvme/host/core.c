@@ -279,7 +279,7 @@ static int nvme_zns_zone_report(struct gendisk *disk, sector_t sector,
 {
 	struct nvme_ns *ns = disk->private_data;
 	struct blk_zone zone;
-	unsigned int zno, i, nrz;
+	unsigned int zno, i, nrz = 0;
 	int ret;
 
 	ret = nvme_zns_update(ns);
@@ -294,13 +294,15 @@ static int nvme_zns_zone_report(struct gendisk *disk, sector_t sector,
 		nrz = min_t(unsigned int, nr_zones, ns->nr_zones - zno);
 
 		for (i = 0; i < nrz; i++) {
-			ret = cb(&zone, zno + i, data);
+			memcpy(&zone, &ns->zones[zno + i],
+			       sizeof(struct blk_zone));
+			ret = cb(&zone, i, data);
 			if (ret)
 				return ret;
 		}
 	}
 
-	return 0;
+	return nrz;
 }
 
 static int nvme_zns_report_prop(struct gendisk *disk,
