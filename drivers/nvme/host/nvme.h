@@ -483,18 +483,25 @@ static inline sector_t nvme_lbad_to_sec(struct nvme_ns *ns, sector_t sector)
 {
 	return (sector << (ns->lba_shift - 9));
 }
-#ifdef CONFIG_BLK_DEV_ZONED
-static inline void nvme_update_req(struct request *req,
-					union nvme_result result)
+
+static inline void nvme_update_req(struct request *req, __le16 status,
+		union nvme_result result)
 {
 	struct nvme_ns *ns = req->q->queuedata;
 
-	if (rq_is_zone_append(req))
+#ifdef CONFIG_BLK_DEV_ZONED
+	if (rq_is_zone_append(req)) {
 		req->returned_sector =
 			nvme_lbad_to_sec(ns, (sector_t)le64_to_cpu(result.u64));
+		return;
+	}
+#endif
+	if (op_is_copy(req_op(req)) && status != NVME_SC_SUCCESS) {
+		req->returned_sector = le64_to_cpu(result.u64);
+	}
 
 }
-#endif
+
 static inline void nvme_end_request(struct request *req, __le16 status,
 		union nvme_result result)
 {
@@ -502,10 +509,10 @@ static inline void nvme_end_request(struct request *req, __le16 status,
 
 	rq->status = le16_to_cpu(status) >> 1;
 	rq->result = result;
-#ifdef CONFIG_BLK_DEV_ZONED
+
 	/* Set the returned sector for zone append commands */
-	nvme_update_req(req, result);
-#endif
+	nvme_update_req(req, status, result);
+
 	/* inject error when permitted by fault injection framework */
 	nvme_should_fail(req);
 	blk_mq_complete_request(req);

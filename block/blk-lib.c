@@ -122,10 +122,11 @@ int __blkdev_issue_copy(struct block_device *bdev, sector_t dest,
 {
 	struct request_queue *q = bdev_get_queue(bdev);
 	struct bio *bio = *biop;
+	struct range_entry *payload;
 	unsigned int op;
 	sector_t bs_mask;
-	sector_t src_sects, len;
-	int i;
+	sector_t src_sects, len = 0, copy_len = 0;
+	int i, ret, total_size;
 
 	if (!q)
 		return -ENXIO;
@@ -137,6 +138,9 @@ int __blkdev_issue_copy(struct block_device *bdev, sector_t dest,
 		return -EOPNOTSUPP;
 	op = REQ_OP_COPY;
 
+	if (nr_srcs > q->limits.max_copy_nr_ranges)
+		return -EINVAL;
+
 	bs_mask = (bdev_logical_block_size(bdev) >> 9) - 1;
 	if (dest & bs_mask)
 		return -EINVAL;
@@ -144,25 +148,51 @@ int __blkdev_issue_copy(struct block_device *bdev, sector_t dest,
 	if (!nr_srcs)
 		return -EINVAL;
 
-	bio = blk_next_bio(bio, 0, gfp_mask);
+	/* Adding one extra range-entry (first) for book keeping */
+	payload = kmalloc_array(nr_srcs + 1, sizeof(*rlist), GFP_ATOMIC |
+			__GFP_NOWARN);
+	if (!payload)
+		return -ENOMEM;
+
+	payload[0].len = nr_srcs;
+	bio = bio_alloc(gfp_mask, 1);
+	if (!bio)
+		return -ENOMEM;
+
 	bio->bi_iter.bi_sector = dest;
-	bio->bi_iter.bi_size = nr_srcs;
 	bio_set_dev(bio, bdev);
-	bio_set_op_attrs(bio, op, 0);
+	bio_set_op_attrs(bio, op, REQ_NOMERGE);
 
 	for (i = 0; i < nr_srcs; i++) {
+		/*  copy payload provided are in bytes */
 		src_sects = rlist[i].src;
 		if (src_sects & bs_mask)
 			return -EINVAL;
-		len = rlist[i].len;
+		src_sects = src_sects >> SECTOR_SHIFT;
+
+		if (len & bs_mask)
+			return -EINVAL;
+		len = rlist[i].len >> SECTOR_SHIFT;
+		if (len > q->limits.max_copy_range_sectors)
+			return -EINVAL;
+		copy_len += len;
 
 		WARN_ON_ONCE((src_sects << 9) > UINT_MAX);
 
-		bio = blk_next_bio(bio, 0, gfp_mask);
-		bio->bi_iter.bi_sector = src_sects;
-		bio->bi_iter.bi_size = len;
-		bio_set_dev(bio, bdev);
-		bio_set_op_attrs(bio, op, 0);
+		payload[i + 1].src = src_sects;
+		payload[i + 1].len = len;
+	}
+
+	if (copy_len > q->limits.max_copy_sectors)
+		return -EINVAL;
+
+	total_size = (nr_srcs + 1) * sizeof(*rlist);
+	ret = bio_add_page(bio, virt_to_page(payload), total_size,
+			offset_in_page(payload));
+
+	if (ret != total_size) {
+		kfree(payload);
+		return -ENOMEM;
 	}
 
 	*biop = bio;
@@ -187,19 +217,19 @@ int blkdev_issue_copy(struct block_device *bdev, sector_t dest,
 		gfp_t gfp_mask, unsigned long flags)
 {
 	struct bio *bio = NULL;
-	struct blk_plug plug;
 	int ret;
 
-	blk_start_plug(&plug);
 	ret = __blkdev_issue_copy(bdev, dest, nr_srcs, rlist, gfp_mask, flags,
 			&bio);
 	if (!ret && bio) {
 		ret = submit_bio_wait(bio);
 		if (ret == -EOPNOTSUPP)
 			ret = 0;
+
+		kfree(page_address(bio_first_bvec_all(bio)->bv_page) +
+				bio_first_bvec_all(bio)->bv_offset);
 		bio_put(bio);
 	}
-	blk_finish_plug(&plug);
 
 	return ret;
 }

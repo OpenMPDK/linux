@@ -307,8 +307,6 @@ void __blk_queue_split(struct request_queue *q, struct bio **bio,
 	struct bio *split = NULL;
 
 	switch (bio_op(*bio)) {
-	case REQ_OP_COPY:
-		break;
 	case REQ_OP_ZONE_COMMIT:
 	case REQ_OP_DISCARD:
 	case REQ_OP_SECURE_ERASE:
@@ -730,7 +728,7 @@ static void blk_account_io_merge(struct request *req)
  */
 static inline bool blk_discard_mergable(struct request *req)
 {
-	if ((req_op(req) == REQ_OP_DISCARD || req_op(req) == REQ_OP_COPY ||
+	if ((req_op(req) == REQ_OP_DISCARD ||
 		req_op(req) == REQ_OP_ZONE_COMMIT) &&
 		queue_max_discard_segments(req->q) > 1)
 		return true;

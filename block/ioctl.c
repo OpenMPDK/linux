@@ -210,6 +210,7 @@ static int blk_ioctl_copy(struct block_device *bdev, fmode_t mode,
 	struct copy_range crange;
 	struct range_entry *rlist;
 	struct request_queue *q = bdev_get_queue(bdev);
+	sector_t dest;
 	int ret;
 
 	if (!(mode & FMODE_WRITE))
@@ -221,6 +222,10 @@ static int blk_ioctl_copy(struct block_device *bdev, fmode_t mode,
 	if (copy_from_user(&crange, (void __user *)arg, sizeof(crange)))
 		return -EFAULT;
 
+	if (crange.dest & ((1 << SECTOR_SHIFT) - 1))
+		return -EFAULT;
+	dest = crange.dest >> SECTOR_SHIFT;
+
 	rlist = kmalloc_array(crange.nr_range, sizeof(*rlist),
 			GFP_ATOMIC | __GFP_NOWARN);
 
@@ -228,14 +233,14 @@ static int blk_ioctl_copy(struct block_device *bdev, fmode_t mode,
 		return -ENOMEM;
 
 	if (copy_from_user(rlist, (void __user *)crange.range_list,
-				sizeof(*rlist) * crange.nr_range))
+				sizeof(*rlist) * crange.nr_range)) {
 		ret = -EFAULT;
+		goto out;
+	}
 
-	//TODO Limit checks
-
-	ret =  blkdev_issue_copy(bdev, crange.dest, crange.nr_range,
+	ret =  blkdev_issue_copy(bdev, dest, crange.nr_range,
 			rlist, GFP_KERNEL, flags);
-
+out:
 	kfree(rlist);
 	return ret;
 }
