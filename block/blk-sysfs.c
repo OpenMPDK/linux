@@ -165,6 +165,23 @@ static ssize_t queue_discard_granularity_show(struct request_queue *q, char *pag
 	return queue_var_show(q->limits.discard_granularity, page);
 }
 
+static ssize_t queue_max_copy_sectors_show(struct request_queue *q, char *page)
+{
+	return queue_var_show(q->limits.max_copy_sectors, page);
+}
+
+static ssize_t queue_max_copy_range_sectors_show(struct request_queue *q,
+		char *page)
+{
+	return queue_var_show(q->limits.max_copy_range_sectors, page);
+}
+
+static ssize_t queue_max_copy_nr_ranges_show(struct request_queue *q,
+		char *page)
+{
+	return queue_var_show(q->limits.max_copy_nr_ranges, page);
+}
+
 static ssize_t queue_discard_max_hw_show(struct request_queue *q, char *page)
 {
 
@@ -576,6 +593,21 @@ static struct queue_sysfs_entry queue_max_discard_segments_entry = {
 	.show = queue_max_discard_segments_show,
 };
 
+static struct queue_sysfs_entry queue_max_copy_sectors_entry = {
+	.attr = {.name = "max_copy_sectors", .mode = 0444 },
+	.show = queue_max_copy_sectors_show,
+};
+
+static struct queue_sysfs_entry queue_max_copy_range_sectors_entry = {
+	.attr = {.name = "max_copy_range_sectors", .mode = 0444 },
+	.show = queue_max_copy_range_sectors_show,
+};
+
+static struct queue_sysfs_entry queue_max_copy_nr_ranges_entry = {
+	.attr = {.name = "max_copy_nr_ranges", .mode = 0444 },
+	.show = queue_max_copy_nr_ranges_show,
+};
+
 static struct queue_sysfs_entry queue_max_integrity_segments_entry = {
 	.attr = {.name = "max_integrity_segments", .mode = 0444 },
 	.show = queue_max_integrity_segments_show,
@@ -762,6 +794,9 @@ static struct attribute *queue_attrs[] = {
 	&queue_discard_max_entry.attr,
 	&queue_discard_max_hw_entry.attr,
 	&queue_discard_zeroes_data_entry.attr,
+	&queue_max_copy_sectors_entry.attr,
+	&queue_max_copy_range_sectors_entry.attr,
+	&queue_max_copy_nr_ranges_entry.attr,
 	&queue_write_same_max_entry.attr,
 	&queue_write_zeroes_max_entry.attr,
 	&queue_nonrot_entry.attr,

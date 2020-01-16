@@ -849,17 +849,17 @@ static inline blk_status_t nvme_setup_copy(struct nvme_ns *ns,
 {
 	struct nvme_ctrl *ctrl = ns->ctrl;
 	struct nvme_copy_range *range = NULL;
-	struct bio *bio;
+	struct range_entry *payload;
 	u16 control = 0;
 	u32 dsmgmt = 0;
-	int nr_range = 0, copied = 0;
+	int nr_range = 0, i;
 	u16 ssrl;
 	u64 slba;
-	bool first = true;
 	unsigned short segments;
 
-	/* max nr of ranges cannot be more than a byte  */
-	segments = (req->bio->bi_iter.bi_size & 0xFF);
+	payload = bio_data(req->bio);
+
+	segments = payload[0].len;
 
 	if (req->cmd_flags & REQ_FUA)
 		control |= NVME_RW_FUA;
@@ -876,40 +876,18 @@ static inline blk_status_t nvme_setup_copy(struct nvme_ns *ns,
 	if (!range)
 		return BLK_STS_RESOURCE;
 
-	__rq_for_each_bio(bio, req) {
-		if (first) {
-			first = false;
-			continue;
-		}
+	for (i = 1; i <= segments; i++) {
 
-		slba = bio->bi_iter.bi_sector >> (ns->lba_shift - 9);
-		if (bio->bi_iter.bi_size & ((1 << (ns->lba_shift - 9)) - 1)) {
-			dev_warn(ctrl->device, "range should be block size aligned\n");
-			goto out;
-		}
+		slba = payload[i].src;
+		slba = slba >> (ns->lba_shift - 9);
 
-		ssrl = bio->bi_iter.bi_size >> (ns->lba_shift - 9);
-		if (ssrl > ns->mssrl) {
-			dev_warn(ctrl->device, "invalid ssrl\n");
-			goto out;
-		}
-
-		if (copied > ns->mcl) {
-			dev_warn(ctrl->device, "can't copy more than [%u] lba\n",
-					ns->mcl);
-			goto out;
-		}
+		ssrl = payload[i].len;
+		ssrl = ssrl >> (ns->lba_shift - 9);
 
 		range[nr_range].slba = cpu_to_le64(slba);
 		range[nr_range].nlb = cpu_to_le16(ssrl - 1);
 
-		copied += ssrl;
 		nr_range++;
-	}
-
-	if (nr_range - 1 > ns->msrc) {
-		dev_warn(ctrl->device, "nr_range is greater than msrc\n");
-		goto out;
 	}
 
 	cmnd->copy.nr_range = nr_range - 1;
@@ -922,15 +900,12 @@ static inline blk_status_t nvme_setup_copy(struct nvme_ns *ns,
 	if (ctrl->nr_streams)
 		nvme_assign_write_stream(ctrl, req, &control, &dsmgmt);
 
-	//TODO end-to-end
+	//TBD end-to-end
 
 	cmnd->rw.control = cpu_to_le16(control);
 	cmnd->rw.dsmgmt = cpu_to_le32(dsmgmt);
 
 	return BLK_STS_OK;
-out:
-	kfree(range);
-	return BLK_STS_IOERR;
 }
 
 static blk_status_t nvme_setup_discard(struct nvme_ns *ns, struct request *req,
@@ -2122,6 +2097,7 @@ static void nvme_config_copy(struct gendisk *disk, struct nvme_ns *ns,
 	struct request_queue *queue = disk->queue;
 
 	if (!(ctrl->oncs & NVME_CTRL_ONCS_COPY)) {
+		queue->limits.max_copy_sectors = 0;
 		blk_queue_flag_clear(QUEUE_FLAG_COPY, queue);
 		return;
 	}
@@ -2133,6 +2109,11 @@ static void nvme_config_copy(struct gendisk *disk, struct nvme_ns *ns,
 
 	if (blk_queue_flag_test_and_set(QUEUE_FLAG_COPY, queue))
 		return;
+
+	queue->limits.max_copy_sectors = ns->mcl * (1 << (ns->lba_shift - 9));
+	queue->limits.max_copy_range_sectors = ns->mssrl *
+		(1 << (ns->lba_shift - 9));
+	queue->limits.max_copy_nr_ranges = ns->msrc + 1;
 }
 
 static void nvme_config_write_zeroes(struct gendisk *disk, struct nvme_ns *ns)

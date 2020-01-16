@@ -302,7 +302,7 @@ enum req_opf {
 	/* Commit buffered data in zone */
 	REQ_OP_ZONE_COMMIT	= 14,
 	/* copy ranges within device */
-	REQ_OP_COPY		= 16,
+	REQ_OP_COPY		= 15,
 
 	/* SCSI passthrough using struct scsi_request */
 	REQ_OP_SCSI_IN		= 32,
