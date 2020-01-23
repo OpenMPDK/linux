@@ -332,8 +332,7 @@ static void nvme_config_zoned(struct gendisk *disk, struct nvme_ns *ns)
 	queue->nr_zones = ns->nr_zones;
 }
 
-static int nvme_zns_init(struct nvme_ns *ns, struct nvme_ctrl *ctrl,
-			 struct nvme_id_ns *id)
+static int nvme_zns_init(struct nvme_ns *ns, struct nvme_id_ns *id)
 {
 	int ret;
 
@@ -2286,13 +2285,18 @@ static void __nvme_revalidate_disk(struct gendisk *disk, struct nvme_id_ns *id)
 		nvme_set_chunk_size(ns);
 	nvme_update_disk_info(disk, ns, id);
 
+#ifdef CONFIG_BLK_DEV_ZONED
 	if (ns->is_zoned) {
-		int ret = blk_revalidate_disk_zones(disk);
+		int ret;
 
+		nvme_config_zoned(disk, ns);
+
+		ret = blk_revalidate_disk_zones(disk);
 		if (ret)
 			dev_err(ns->ctrl->device,
 				"revalidating disk zones failed\n");
 	}
+#endif
 
 #ifdef CONFIG_NVME_MULTIPATH
 	if (ns->head->disk) {
@@ -4082,11 +4086,13 @@ static int nvme_alloc_ns(struct nvme_ctrl *ctrl, unsigned nsid, u8 nstype)
 	/* Identify ZNS by looking at specific parameters for now */
 	if (id->zonef[id->fzsze].zs > 0) {
 		/* XXX: Need to pass ctrl given current TP. This will change */
-		ret = nvme_zns_init(ns, ctrl, id);
+		ret = nvme_zns_init(ns, id);
 		if (ret) {
 			dev_warn(ctrl->device, "ZNS init failure\n");
 			goto out_put_disk;
 		}
+
+		__nvme_revalidate_disk(disk, id);
 	}
 #endif
 
