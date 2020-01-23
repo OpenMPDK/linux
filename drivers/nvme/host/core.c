@@ -2265,13 +2265,7 @@ static void __nvme_revalidate_disk(struct gendisk *disk, struct nvme_id_ns *id)
 		ns->lba_shift = 9;
 	ns->noiob = le16_to_cpu(id->noiob);
 
-#ifdef CONFIG_BLK_DEV_ZONED
-	/* XXX: Work around metadata issue on ZNS - TOGO */
-	if (id->zonef[id->fzsze].zs > 0)
-		ns->ms = 0;
-	else
-#endif
-		ns->ms = le16_to_cpu(id->lbaf[id->flbas &
+	ns->ms = le16_to_cpu(id->lbaf[id->flbas &
 						NVME_NS_FLBAS_LBA_MASK].ms);
 
 	ns->ext = ns->ms && (id->flbas & NVME_NS_FLBAS_META_EXT);
