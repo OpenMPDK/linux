@@ -239,10 +239,6 @@ struct request {
 		u64 fifo_time;
 	};
 
-#ifdef CONFIG_BLK_DEV_ZONED
-	sector_t returned_sector;
-#endif
-
 	/*
 	 * completion callback.
 	 */
