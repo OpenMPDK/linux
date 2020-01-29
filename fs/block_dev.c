@@ -1942,7 +1942,7 @@ static void blkdev_copy_endio(struct bio *bio)
 	 * Commented during rebase without append.
 	 */
 	/* if (ret) */
-		/* res = bio->bi_comp_lba; */
+		/* res = bio->bi_iter.bi_sector; */
 
 	iocb->ki_complete(iocb, ret, res);
 
