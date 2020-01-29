@@ -241,6 +241,17 @@ static void req_bio_endio(struct request *rq, struct bio *bio,
 
 	bio_advance(bio, nbytes);
 
+#ifdef CONFIG_BLK_DEV_ZONED
+	/* TODO: JAVIER: This has to go or have a proper error model */
+	if (bio->bi_opf & REQ_ZONE_APPEND) {
+		bio->bi_iter.bi_sector = blk_rq_pos(rq);
+		if (bio->bi_next || !(bio->bi_opf & REQ_NOMERGE)) {
+			pr_err("Error: Zone-append I/O found to be merged during completion\n");
+			BUG();
+		}
+	}
+#endif
+
 	/* don't actually finish bio if it's part of flush sequence */
 	if (bio->bi_iter.bi_size == 0 && !(rq->rq_flags & RQF_FLUSH_SEQ))
 		bio_endio(bio);
