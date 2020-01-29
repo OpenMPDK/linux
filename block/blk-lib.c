@@ -125,8 +125,8 @@ int __blkdev_issue_copy(struct block_device *bdev, sector_t dest,
 	struct range_entry *payload;
 	unsigned int op;
 	sector_t bs_mask;
-	sector_t src_sects, len = 0, copy_len = 0;
-	int i, ret, total_size;
+	sector_t src_sects, len = 0, copy_len = 0, cdest;
+	int i, ret, total_size, max_copy_len, max_nr_srcs, copied_srcs;
 
 	if (!q)
 		return -ENXIO;
@@ -138,8 +138,8 @@ int __blkdev_issue_copy(struct block_device *bdev, sector_t dest,
 		return -EOPNOTSUPP;
 	op = REQ_OP_COPY;
 
-	if (nr_srcs > q->limits.max_copy_nr_ranges)
-		return -EINVAL;
+	max_nr_srcs = q->limits.max_copy_nr_ranges;
+	max_copy_len = q->limits.max_copy_sectors;
 
 	bs_mask = (bdev_logical_block_size(bdev) >> 9) - 1;
 	if (dest & bs_mask)
@@ -148,51 +148,61 @@ int __blkdev_issue_copy(struct block_device *bdev, sector_t dest,
 	if (!nr_srcs)
 		return -EINVAL;
 
-	/* Adding one extra range-entry (first) for book keeping */
-	payload = kmalloc_array(nr_srcs + 1, sizeof(*rlist), GFP_ATOMIC |
-			__GFP_NOWARN);
-	if (!payload)
-		return -ENOMEM;
+	copied_srcs = 0;
+	cdest = dest;
 
-	payload[0].len = nr_srcs;
-	bio = bio_alloc(gfp_mask, 1);
-	if (!bio)
-		return -ENOMEM;
+	while (copied_srcs < nr_srcs) {
 
-	bio->bi_iter.bi_sector = dest;
-	bio_set_dev(bio, bdev);
-	bio_set_op_attrs(bio, op, REQ_NOMERGE);
+		/* Adding one extra range-entry (first) for book keeping */
+		payload = kmalloc_array(max_nr_srcs + 1, sizeof(*rlist),
+				GFP_ATOMIC | __GFP_NOWARN);
+		if (!payload)
+			return -ENOMEM;
 
-	for (i = 0; i < nr_srcs; i++) {
-		/*  copy payload provided are in bytes */
-		src_sects = rlist[i].src;
-		if (src_sects & bs_mask)
-			return -EINVAL;
-		src_sects = src_sects >> SECTOR_SHIFT;
+		bio = blk_next_bio(bio, 1, gfp_mask);
+		if (!bio)
+			return -ENOMEM; //TBD needed ?
 
-		if (len & bs_mask)
-			return -EINVAL;
-		len = rlist[i].len >> SECTOR_SHIFT;
-		if (len > q->limits.max_copy_range_sectors)
-			return -EINVAL;
-		copy_len += len;
+		bio->bi_iter.bi_sector = cdest;
+		bio_set_dev(bio, bdev);
+		bio_set_op_attrs(bio, op, REQ_NOMERGE);
 
-		WARN_ON_ONCE((src_sects << 9) > UINT_MAX);
+		for (i = 1, copy_len = 0; copied_srcs < nr_srcs &&
+				i <= max_nr_srcs; i++, copied_srcs++) {
+			/*  copy payload provided are in bytes */
+			src_sects = rlist[copied_srcs].src;
+			if (src_sects & bs_mask)
+				return -EINVAL;
+			src_sects = src_sects >> SECTOR_SHIFT;
 
-		payload[i + 1].src = src_sects;
-		payload[i + 1].len = len;
-	}
+			if (len & bs_mask)
+				return -EINVAL;
+			len = rlist[copied_srcs].len >> SECTOR_SHIFT;
+			if (len > q->limits.max_copy_range_sectors)
+				return -EINVAL;
 
-	if (copy_len > q->limits.max_copy_sectors)
-		return -EINVAL;
+			if (copy_len + len > max_copy_len) {
+				break;
+			}
 
-	total_size = (nr_srcs + 1) * sizeof(*rlist);
-	ret = bio_add_page(bio, virt_to_page(payload), total_size,
-			offset_in_page(payload));
+			copy_len += len;
 
-	if (ret != total_size) {
-		kfree(payload);
-		return -ENOMEM;
+			WARN_ON_ONCE((src_sects << 9) > UINT_MAX);
+
+			payload[i].src = src_sects;
+			payload[i].len = len;
+			cdest += len;
+		}
+
+		payload[0].len = i - 1;
+
+		total_size = (max_nr_srcs + 1) * sizeof(*rlist);
+		ret = bio_add_page(bio, virt_to_page(payload), total_size,
+						   offset_in_page(payload));
+		if (ret != total_size) {
+			kfree(payload);
+			return -ENOMEM;
+		}
 	}
 
 	*biop = bio;
