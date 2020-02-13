@@ -159,10 +159,10 @@ int blkdev_zone_commit(struct block_device *bdev, int op,
 		       void __user *ubuf, sector_t nr_sectors,
 		       gfp_t gfp_mask)
 {
-	struct blk_plug plug;
 	struct bio *bio = NULL;
 	u64 *elba_list;
-	int ret, i;
+	u64 *payload;
+	int ret, i, total_size;
 
 	elba_list = kmalloc_array(nr_sectors, sizeof(u64), GFP_KERNEL);
 	if (!elba_list)
@@ -171,23 +171,34 @@ int blkdev_zone_commit(struct block_device *bdev, int op,
 	if (copy_from_user(elba_list, ubuf, sizeof(u64) * nr_sectors))
 		return -EFAULT;
 
-	blk_start_plug(&plug);
-	for (i = 0; i < nr_sectors; i++) {
-		bio = blk_next_bio(bio, 0, gfp_mask);
-		bio->bi_iter.bi_sector = elba_list[i];
-		bio_set_dev(bio, bdev);
-		bio->bi_opf = op;
+	payload = kmalloc_array(nr_sectors + 1, sizeof(u64),
+			GFP_ATOMIC | __GFP_NOWARN);
+	if (!payload)
+		return -ENOMEM;
 
-		bio->bi_iter.bi_size = 1 << 9;
+	payload[0] = nr_sectors;
+	bio = bio_alloc(gfp_mask, 1);
+	if (!bio)
+		return -ENOMEM;
 
-		/* This may take a while, so be nice to others */
-		cond_resched();
+	bio->bi_iter.bi_sector = elba_list[0];
+	bio_set_dev(bio, bdev);
+	bio_set_op_attrs(bio, op, REQ_NOMERGE);
+
+	for (i = 1; i <= nr_sectors; i++)
+		payload[i] = elba_list[i-1];
+
+	total_size = (nr_sectors + 1) * sizeof(u64);
+	ret = bio_add_page(bio, virt_to_page(payload), total_size,
+			offset_in_page(payload));
+	if (ret != total_size) {
+		kfree(payload);
+		return -ENOMEM;
 	}
 
 	ret = submit_bio_wait(bio);
 	bio_put(bio);
-	blk_finish_plug(&plug);
-
+	kfree(payload);
 	kfree(elba_list);
 	return ret;
 }

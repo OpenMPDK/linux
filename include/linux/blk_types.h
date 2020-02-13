@@ -299,10 +299,10 @@ enum req_opf {
 	REQ_OP_ZONE_FINISH	= 12,
 	/* Transition a zone to offline */
 	REQ_OP_ZONE_OFFLINE	= 13,
-	/* Commit buffered data in zone */
-	REQ_OP_ZONE_COMMIT	= 14,
 	/* copy ranges within device */
 	REQ_OP_COPY		= 15,
+	/* Commit buffered data in zone */
+	REQ_OP_ZONE_COMMIT	= 17,
 
 	/* SCSI passthrough using struct scsi_request */
 	REQ_OP_SCSI_IN		= 32,

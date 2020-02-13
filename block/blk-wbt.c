@@ -465,9 +465,9 @@ static inline unsigned int get_limit(struct rq_wb *rwb, unsigned long rw)
 	 */
 	if (!rwb_enabled(rwb))
 		return UINT_MAX;
+	/* :kanchan: Should we consider ZONE_COMMIT & COPY here*/
 
-	if ((rw & REQ_OP_MASK) == REQ_OP_DISCARD ||
-				(rw & REQ_OP_MASK) == REQ_OP_ZONE_COMMIT)
+	if ((rw & REQ_OP_MASK) == REQ_OP_DISCARD)
 		return rwb->wb_background;
 
 	/*

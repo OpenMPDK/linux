@@ -1049,20 +1049,27 @@ static inline blk_status_t nvme_setup_zone_commit(struct nvme_ns *ns,
 						  struct request *req,
 						  struct nvme_command *cmnd)
 {
-	struct bio *bio;
-	unsigned short segments = blk_rq_nr_discard_segments(req), n = 0;
+	unsigned short segments, i;
+	u64 *payload;
 	u64 *elba_list;
 
+	payload = bio_data(req->bio);
+	if (payload == NULL) {
+		WARN_ON(1);
+		return BLK_STS_RESOURCE;
+	}
+
+	segments = payload[0];
+
 	elba_list = kmalloc_array(segments, sizeof(u64),
-					GFP_ATOMIC | __GFP_NOWARN);
+			GFP_ATOMIC | __GFP_NOWARN);
 	if (!elba_list)
 		return BLK_STS_RESOURCE;
 
-	__rq_for_each_bio(bio, req) {
-		u64 elba = (bio->bi_iter.bi_sector >> (ns->lba_shift - 9));
+	for (i = 0; i < segments; i++) {
+		u64 elba = payload[i + 1] >> (ns->lba_shift - 9);
 
-		if (n < segments)
-			elba_list[n++] = cpu_to_le64(elba);
+		elba_list[i] = cpu_to_le64(elba);
 	}
 
 	cmnd->zmgmt_send.zsa = NVME_CMD_ZONE_MGMT_SEND_COMMIT;
