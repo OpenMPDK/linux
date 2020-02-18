@@ -273,11 +273,11 @@ out:
 	return ret;
 }
 
-static int nvme_zns_zone_report(struct gendisk *disk, sector_t sector,
+
+static int __nvme_zns_zone_report(struct nvme_ns *ns, sector_t sector,
 				unsigned int nr_zones, report_zones_cb cb,
 				void *data)
 {
-	struct nvme_ns *ns = disk->private_data;
 	struct blk_zone zone;
 	unsigned int zno, i, nrz = 0;
 	int ret;
@@ -306,11 +306,18 @@ static int nvme_zns_zone_report(struct gendisk *disk, sector_t sector,
 	return nrz;
 }
 
-static int nvme_zns_report_prop(struct gendisk *disk,
-				struct blk_zone_dev *zprop)
+static int nvme_zns_zone_report(struct gendisk *disk, sector_t sector,
+				unsigned int nr_zones, report_zones_cb cb,
+				void *data)
 {
 	struct nvme_ns *ns = disk->private_data;
+	return __nvme_zns_zone_report(ns, sector, nr_zones, cb, data);
 
+}
+
+static int __nvme_zns_report_prop(struct nvme_ns *ns,
+				  struct blk_zone_dev *zprop)
+{
 	zprop->nar = ns->nar;
 	zprop->nor = ns->nor;
 	zprop->zal = ns->zal;
@@ -321,6 +328,13 @@ static int nvme_zns_report_prop(struct gendisk *disk,
 	zprop->zrwacg = ns->zrwacg;
 
 	return 0;
+}
+
+static int nvme_zns_report_prop(struct gendisk *disk,
+				struct blk_zone_dev *zprop)
+{
+	struct nvme_ns *ns = disk->private_data;
+	return __nvme_zns_report_prop(ns, zprop);
 }
 
 static void nvme_config_zoned(struct gendisk *disk, struct nvme_ns *ns)
@@ -2507,14 +2521,47 @@ static void nvme_ns_head_release(struct gendisk *disk, fmode_t mode)
 	nvme_put_ns_head(disk->private_data);
 }
 
+static int nvme_ns_head_zns_zone_report(struct gendisk *disk, sector_t sector,
+					unsigned int nr_zones,
+					report_zones_cb cb,
+					void *data)
+{
+	struct nvme_ns_head *head = NULL;
+	struct nvme_ns *ns;
+	int srcu_idx, ret;
+
+	ns = nvme_get_ns_from_disk(disk, &head, &srcu_idx);
+	ret = __nvme_zns_zone_report(ns, sector, nr_zones, cb, data);
+	nvme_put_ns_from_disk(head, srcu_idx);
+
+	return ret;
+}
+
+static int nvme_ns_head_zns_report_prop(struct gendisk *disk,
+					struct blk_zone_dev *zprop)
+{
+	struct nvme_ns_head *head = NULL;
+	struct nvme_ns *ns;
+	int srcu_idx, ret;
+
+	ns = nvme_get_ns_from_disk(disk, &head, &srcu_idx);
+	ret = __nvme_zns_report_prop(ns, zprop);
+	nvme_put_ns_from_disk(head, srcu_idx);
+
+	return ret;
+}
+
 const struct block_device_operations nvme_ns_head_ops = {
-	.owner		= THIS_MODULE,
-	.open		= nvme_ns_head_open,
-	.release	= nvme_ns_head_release,
-	.ioctl		= nvme_ioctl,
-	.compat_ioctl	= nvme_ioctl,
-	.getgeo		= nvme_getgeo,
-	.pr_ops		= &nvme_pr_ops,
+	.owner			= THIS_MODULE,
+	.open			= nvme_ns_head_open,
+	.release		= nvme_ns_head_release,
+	.ioctl			= nvme_ioctl,
+	.compat_ioctl		= nvme_ioctl,
+	.getgeo			= nvme_getgeo,
+	.pr_ops			= &nvme_pr_ops,
+	.report_zones		= nvme_ns_head_zns_zone_report,
+	.report_zone_prop	= nvme_ns_head_zns_report_prop,
+
 };
 #endif /* CONFIG_NVME_MULTIPATH */
 
