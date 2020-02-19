@@ -184,11 +184,11 @@ static void nvme_zns_clean_zones(struct blk_zone *blk_zones, unsigned nr_zones)
 		memset(&blk_zones[i], 0, sizeof(struct blk_zone));
 }
 
-static u64 nvme_zns_nr_zones(struct nvme_ns *ns)
+static u64 nvme_zns_nr_zones(struct nvme_ns *ns, struct gendisk *disk)
 {
-	struct gendisk *disk = ns->disk;
 	u64 nr_zones;
 
+	/* JAVIER: This is a hack. Does not work when capacity is used */
 	nr_zones = get_capacity(disk) >> (ns->lba_shift - 9);
 	if (do_div(nr_zones, (ns->zone_secs)))
 		nr_zones++;
@@ -346,14 +346,15 @@ static void nvme_config_zoned(struct gendisk *disk, struct nvme_ns *ns)
 	queue->nr_zones = ns->nr_zones;
 }
 
-static int nvme_zns_init(struct nvme_ns *ns, struct nvme_id_ns *id)
+static int nvme_zns_init(struct nvme_ns *ns, struct nvme_id_ns *id,
+			 struct gendisk *disk)
 {
 	int ret;
 
 	ns->is_zoned = true;
 	ns->zone_secs = id->zonef[id->fzsze].zs >> ns->lba_shift;
 	ns->zds = id->zonef[id->fzsze].zds <<  6;
-	ns->nr_zones = nvme_zns_nr_zones(ns);
+	ns->nr_zones = nvme_zns_nr_zones(ns, disk);
 
 	ns->nar = le32_to_cpu(id->nar);
 	ns->nor = le32_to_cpu(id->nor);
@@ -4128,7 +4129,6 @@ static int nvme_alloc_ns(struct nvme_ctrl *ctrl, unsigned nsid, u8 nstype)
 	disk->queue = ns->queue;
 	disk->flags = flags;
 	memcpy(disk->disk_name, disk_name, DISK_NAME_LEN);
-	ns->disk = disk;
 
 	__nvme_revalidate_disk(disk, id);
 
@@ -4136,7 +4136,7 @@ static int nvme_alloc_ns(struct nvme_ctrl *ctrl, unsigned nsid, u8 nstype)
 	/* Identify ZNS by looking at specific parameters for now */
 	if (id->zonef[id->fzsze].zs > 0) {
 		/* XXX: Need to pass ctrl given current TP. This will change */
-		ret = nvme_zns_init(ns, id);
+		ret = nvme_zns_init(ns, id, disk);
 		if (ret) {
 			dev_warn(ctrl->device, "ZNS init failure\n");
 			goto out_put_disk;
@@ -4153,6 +4153,8 @@ static int nvme_alloc_ns(struct nvme_ctrl *ctrl, unsigned nsid, u8 nstype)
 			goto out_put_disk;
 		}
 	}
+
+	ns->disk = disk;
 
 	down_write(&ctrl->namespaces_rwsem);
 	list_add_tail(&ns->list, &ctrl->namespaces);
