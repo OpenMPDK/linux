@@ -178,7 +178,6 @@ struct bio {
 		struct bio_integrity_payload *bi_integrity; /* data integrity */
 #endif
 	};
-	sector_t		bi_comp_lba;	/* returned append lba for zbd*/
 
 	unsigned short		bi_vcnt;	/* how many bio_vec's */
 

@@ -319,7 +319,7 @@ static void blkdev_bio_end_io(struct bio *bio)
 				iocb->ki_pos += ret;
 #ifdef CONFIG_BLK_DEV_ZONED
 				if (iocb->ki_flags & IOCB_ZONE_APPEND)
-					res = bio->bi_comp_lba << SECTOR_SHIFT;
+					res = bio->bi_iter.bi_sector << SECTOR_SHIFT;
 #endif
 			} else {
 				ret = blk_status_to_errno(dio->bio.bi_status);
@@ -2056,13 +2056,9 @@ static void blkdev_copy_endio(struct bio *bio)
 	int ret = blk_status_to_errno(bio->bi_status);
 	long res = 0;
 
-	/* TBD:
-	 * bi_comp_lba was originally introduced for zone-append.
-	 * this is being reused here to return copied source-ranges
-	 * this could be useful for error-handling in partial copy-scenario
-	 */
+	/* For error-handling in partial copy-scenario */
 	if (ret)
-		res = bio->bi_comp_lba;
+		res = bio->bi_iter.bi_sector;
 
 	iocb->ki_complete(iocb, ret, res);
 

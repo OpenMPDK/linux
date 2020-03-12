@@ -239,11 +239,6 @@ struct request {
 		u64 fifo_time;
 	};
 
-	/* completion Values
-	 * only used by zone append for zoned devices
-	*/
-	sector_t returned_sector;
-
 	/*
 	 * completion callback.
 	 */
