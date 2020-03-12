@@ -1357,7 +1357,7 @@ static blk_qc_t null_queue_bio(struct request_queue *q, struct bio *bio)
 	null_handle_cmd(cmd, sector, nr_sectors, bio_op(bio));
 
 	if (bio->bi_opf & REQ_ZONE_APPEND)
-		bio->bi_comp_lba = cmd->comp_lba;
+		bio->bi_iter.bi_sector = cmd->comp_lba;
 	return BLK_QC_T_NONE;
 }
 
@@ -1426,7 +1426,7 @@ static blk_status_t null_queue_rq(struct blk_mq_hw_ctx *hctx,
 	ret = null_handle_cmd(cmd, sector, nr_sectors, req_op(bd->rq));
 
 	if (bd->rq->cmd_flags & REQ_ZONE_APPEND)
-		bd->rq->returned_sector = cmd->comp_lba;
+		bd->rq->__sector = cmd->comp_lba;
 	return ret;
 }
 
