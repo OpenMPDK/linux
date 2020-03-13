@@ -362,7 +362,7 @@ static int nvme_zns_init(struct nvme_ns *ns, struct nvme_id_ns *id,
 	ns->rrl = le32_to_cpu(id->rrl);
 	ns->zoc = id->zoc;
 
-	ns->zrwacg = le32_to_cpu(id->zrwacg) << (ns->lba_shift - 9);
+	ns->zrwacg = (le32_to_cpu(id->zrwacg) + 1) << (ns->lba_shift - 9);
 	ns->mzrwar = le32_to_cpu(id->mzrwar);
 	ns->zrwas = le32_to_cpu(id->zrwas) >> 9;
 
