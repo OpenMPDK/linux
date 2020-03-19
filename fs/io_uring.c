@@ -768,8 +768,11 @@ static void io_cqring_fill_event(struct io_kiocb *req, long res, long res2)
 	if (likely(cqe)) {
 		WRITE_ONCE(cqe->user_data, req->user_data);
 		WRITE_ONCE(cqe->res, res);
-		WRITE_ONCE(cqe->flags, 0);
-		WRITE_ONCE(cqe->res2, res2);
+		if ((READ_ONCE(req->sqe->opcode) == IORING_OP_ZONE_APPEND) || (READ_ONCE(req->sqe->opcode) == IORING_OP_ZONE_APPEND_FIXED)) {
+			WRITE_ONCE(cqe->offset, res2); //TODO implicit ?
+		} else {
+			WRITE_ONCE(cqe->flags, 0);
+		}
 	} else if (ctx->cq_overflow_flushed) {
 		WRITE_ONCE(ctx->rings->cq_overflow,
 				atomic_inc_return(&ctx->cached_cq_overflow));
@@ -1878,6 +1881,7 @@ static int io_write(struct io_kiocb *req, struct io_kiocb **nxt,
 
 	iov_count = iov_iter_count(&iter);
 	ret = rw_verify_area(WRITE, file, &kiocb->ki_pos, iov_count);
+
 	if (!ret) {
 		ssize_t ret2;
 
@@ -1895,9 +1899,9 @@ static int io_write(struct io_kiocb *req, struct io_kiocb **nxt,
 						SB_FREEZE_WRITE);
 		}
 
-#ifdef CONFIG_BLK_ZONED
-		if ((READ_ONCE(req->sqe->opcode) == IORING_OP_ZONE_APPEND) ||
-			(READ_ONCE(req->io->sqe.opcode) ==
+#ifdef CONFIG_BLK_DEV_ZONED
+		if ((req->sqe->opcode == IORING_OP_ZONE_APPEND) ||
+			(req->sqe->opcode ==
 			IORING_OP_ZONE_APPEND_FIXED)) {
 			kiocb->ki_flags |= IOCB_ZONE_APPEND;
 		}
