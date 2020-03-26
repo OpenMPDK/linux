@@ -234,6 +234,7 @@ struct nvme_ctrl {
 	u64 cap;
 	u32 page_size;
 	u32 max_hw_sectors;
+	u32 max_zone_append_sectors;
 	u32 max_segments;
 	u16 crdt[3];
 	u16 oncs;
@@ -476,6 +477,18 @@ static inline sector_t nvme_lbad_to_sec(struct nvme_ns *ns, sector_t sector)
 {
 	return (sector << (ns->lba_shift - 9));
 }
+#ifdef CONFIG_BLK_DEV_ZONED
+static inline void nvme_update_req(struct request *req,
+					union nvme_result result)
+{
+	struct nvme_ns *ns = req->q->queuedata;
+
+	if (rq_is_zone_append(req))
+		req->returned_sector =
+			nvme_lbad_to_sec(ns, (sector_t)le64_to_cpu(result.u64));
+
+}
+#endif
 static inline void nvme_end_request(struct request *req, __le16 status,
 		union nvme_result result)
 {
@@ -483,7 +496,10 @@ static inline void nvme_end_request(struct request *req, __le16 status,
 
 	rq->status = le16_to_cpu(status) >> 1;
 	rq->result = result;
-
+#ifdef CONFIG_BLK_DEV_ZONED
+	/* Set the returned sector for zone append commands */
+	nvme_update_req(req, result);
+#endif
 	/* inject error when permitted by fault injection framework */
 	nvme_should_fail(req);
 	blk_mq_complete_request(req);
