@@ -378,6 +378,14 @@ static int nvme_zns_init(struct nvme_ns *ns, struct nvme_id_ns *id,
 	if (!ns->zones)
 		return -ENOMEM;
 
+	/* update queue limits based on zamds */
+	blk_queue_max_hw_zone_append_sectors(ns->queue,
+				ns->ctrl->max_zone_append_sectors);
+
+	/* update queue limits based on zamds */
+	blk_queue_max_hw_sectors(ns->queue, min(ns->ctrl->max_hw_sectors,
+					ns->ctrl->max_zone_append_sectors));
+
 	return 0;
 }
 
@@ -941,8 +949,14 @@ static inline blk_status_t nvme_setup_rw(struct nvme_ns *ns,
 
 	if (req->cmd_flags & REQ_RAHEAD)
 		dsmgmt |= NVME_RW_DSM_FREQ_PREFETCH;
-
+#ifdef CONFIG_BLK_DEV_ZONED
+	cmnd->rw.opcode = (rq_data_dir(req) ?
+				(rq_is_zone_append(req) ?
+				nvme_cmd_zns_append : nvme_cmd_write) :
+				nvme_cmd_read);
+#else
 	cmnd->rw.opcode = (rq_data_dir(req) ? nvme_cmd_write : nvme_cmd_read);
+#endif
 	cmnd->rw.nsid = cpu_to_le32(ns->head->ns_id);
 	cmnd->rw.slba = cpu_to_le64(nvme_sect_to_lba(ns, blk_rq_pos(req)));
 	cmnd->rw.length = cpu_to_le16((blk_rq_bytes(req) >> ns->lba_shift) - 1);
@@ -2502,7 +2516,6 @@ int nvme_enable_ctrl(struct nvme_ctrl *ctrl)
 		ctrl->ctrl_config = NVME_CC_CSS_MULTIPLE;
 	else
 		ctrl->ctrl_config = NVME_CC_CSS_NVM;
-
 	ctrl->ctrl_config |= (page_shift - 12) << NVME_CC_MPS_SHIFT;
 	ctrl->ctrl_config |= NVME_CC_AMS_RR | NVME_CC_SHN_NONE;
 	ctrl->ctrl_config |= NVME_CC_IOSQES | NVME_CC_IOCQES;
@@ -3237,6 +3250,13 @@ int nvme_init_identify(struct nvme_ctrl *ctrl)
 		max_hw_sectors = UINT_MAX;
 	ctrl->max_hw_sectors =
 		min_not_zero(ctrl->max_hw_sectors, max_hw_sectors);
+#ifdef CONFIG_BLK_DEV_ZONED
+	if (id->zamds)
+		ctrl->max_zone_append_sectors =
+			1 << (id->zamds + page_shift - 9);
+	else
+		ctrl->max_zone_append_sectors = max_hw_sectors;
+#endif
 	nvme_set_queue_limits(ctrl, ctrl->admin_q);
 	ctrl->sgls = le32_to_cpu(id->sgls);
 	ctrl->kas = le16_to_cpu(id->kas);
