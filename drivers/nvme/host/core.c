@@ -298,7 +298,8 @@ static int nvme_zns_zone_report(struct gendisk *disk, sector_t sector,
 {
 	struct nvme_ns *ns = disk->private_data;
 	struct blk_zone zone;
-	unsigned int zno, i, nrz = 0;
+	unsigned int i, nrz = 0;
+	u64 zno;
 	int ret;
 
 	ret = nvme_zns_update(ns);
@@ -320,6 +321,20 @@ static int nvme_zns_zone_report(struct gendisk *disk, sector_t sector,
 	}
 
 	return nrz;
+}
+
+static int nvme_zns_report_prop(struct gendisk *disk,
+				struct blk_zone_dev *zprop)
+{
+	struct nvme_ns *ns = disk->private_data;
+
+	zprop->mar = ns->mar;
+	zprop->mor = ns->mor;
+	zprop->rrl = ns->rrl;
+	zprop->frl = ns->frl;
+	zprop->zoc = ns->zoc;
+
+	return 0;
 }
 
 static void nvme_config_zoned(struct gendisk *disk, struct nvme_ns *ns)
@@ -365,7 +380,14 @@ static void nvme_zns_exit(struct nvme_ns *ns)
 }
 #else
 static int nvme_zns_zone_report(struct gendisk *disk, sector_t sector,
-				struct blk_zone *zones, unsigned int *nr_zones)
+				unsigned int nr_zones, report_zones_cb cb,
+				void *data)
+{
+	return -ENOTSUPP;
+}
+
+static int nvme_zns_report_prop(struct gendisk *disk,
+				struct blk_zone_dev *zprop)
 {
 	return -ENOTSUPP;
 }
@@ -2403,6 +2425,7 @@ static const struct block_device_operations nvme_fops = {
 	.revalidate_disk= nvme_revalidate_disk,
 	.pr_ops		= &nvme_pr_ops,
 	.report_zones	= nvme_zns_zone_report,
+	.report_zone_prop	= nvme_zns_report_prop,
 };
 
 #ifdef CONFIG_NVME_MULTIPATH
