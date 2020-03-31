@@ -157,6 +157,16 @@ enum blk_zone_mgmt_flags {
 	BLK_ZONE_SELECT_ALL	= 1 << 0,
 };
 
+/**
+ * Zone Attributes
+ */
+enum blk_zone_attr {
+	BLK_ZONE_ATTR_ZFC	= 1 << 0,
+	BLK_ZONE_ATTR_FZR	= 1 << 1,
+	BLK_ZONE_ATTR_RZR	= 1 << 2,
+	BLK_ZONE_ATTR_ZDEV	= 1 << 7,
+};
+
 struct blk_zone_mgmt {
 	__u8		action;
 	__u8		resv3[3];
