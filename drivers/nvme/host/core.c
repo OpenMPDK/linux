@@ -331,7 +331,7 @@ static void nvme_config_zoned(struct gendisk *disk, struct nvme_ns *ns)
 }
 
 static int nvme_zns_init(struct nvme_ns *ns, struct nvme_id_ns *id,
-			 struct nvme_id_zns *zns_id)
+			 struct nvme_id_ns_zns *zns_id)
 {
 	int ret;
 
@@ -1291,6 +1291,28 @@ void nvme_stop_keep_alive(struct nvme_ctrl *ctrl)
 }
 EXPORT_SYMBOL_GPL(nvme_stop_keep_alive);
 
+static int nvme_identify_ctrl_iocs(struct nvme_ctrl *dev, void **ctrl,
+				   unsigned int csi)
+{
+	struct nvme_command c = { };
+	int error;
+
+	/* gcc-4.4.4 (at least) has issues with initializers and anon unions */
+	c.identify.opcode = nvme_admin_identify;
+	c.identify.cns = NVME_ID_CNS_NS_CTRL_IOCS;
+	c.identify.csi = csi;
+
+	*ctrl = kmalloc(NVME_IDENTIFY_DATA_SIZE, GFP_KERNEL);
+	if (!*ctrl)
+		return -ENOMEM;
+
+	error = nvme_submit_sync_cmd(dev->admin_q, &c, *ctrl,
+			NVME_IDENTIFY_DATA_SIZE);
+	if (error)
+		kfree(*ctrl);
+	return error;
+}
+
 static int nvme_identify_ctrl(struct nvme_ctrl *dev, struct nvme_id_ctrl **id)
 {
 	struct nvme_command c = { };
@@ -1409,7 +1431,7 @@ static int nvme_identify_ns_list(struct nvme_ctrl *dev, unsigned int nsid,
 
 static int nvme_identify_ns(struct nvme_ctrl *ctrl,
 			    unsigned int nsid, struct nvme_id_ns **id,
-			    unsigned int csi)
+			    unsigned int cns, unsigned int csi)
 {
 	struct nvme_command c = { };
 	int error;
@@ -1417,12 +1439,10 @@ static int nvme_identify_ns(struct nvme_ctrl *ctrl,
 	/* gcc-4.4.4 (at least) has issues with initializers and anon unions */
 	c.identify.opcode = nvme_admin_identify;
 	c.identify.nsid = cpu_to_le32(nsid);
-	c.identify.csi = csi;
+	c.identify.cns = cns;
 
-	if (csi == NVME_IOCS_NVM)
-		c.identify.cns = NVME_ID_CNS_NS;
-	else
-		c.identify.cns = NVME_ID_CNS_NS_IOCS;
+	if (cns == NVME_ID_CNS_NS_IOCS)
+		c.identify.csi = csi;
 
 	*id = kmalloc(sizeof(**id), GFP_KERNEL);
 	if (!*id)
@@ -2164,7 +2184,8 @@ static int nvme_revalidate_disk(struct gendisk *disk)
 		return -ENODEV;
 	}
 
-	ret = nvme_identify_ns(ctrl, ns->head->ns_id, &id, ns->csi);
+	ret = nvme_identify_ns(ctrl, ns->head->ns_id, &id, NVME_ID_CNS_NS,
+								ns->csi);
 	if (ret)
 		goto out;
 
@@ -3271,6 +3292,37 @@ int nvme_init_identify(struct nvme_ctrl *ctrl)
 	if (ret < 0)
 		return ret;
 
+	/* TODO: JAVIER: THIS NEEDS TO BE DONE PROPERLY */
+	if (NVME_CAP_CSS(ctrl->cap) & NVME_IOCS_MULTIPLE_SUPP) {
+		int i;
+
+		for (i = 0; i < ctrl->csc.ncomb; i++) {
+			if (ctrl->csc.comb[i] & NVME_IOCS_VECTOR_ZND) {
+				struct nvme_id_ctrl_zns *id_zns;
+
+				ret = nvme_identify_ctrl_iocs(ctrl,
+					(void **)&id_zns, NVME_IOCS_ZND);
+				if (ret) {
+					dev_err(ctrl->device,
+					"Identify Controller failed (%d)\n",
+					ret);
+
+					goto out_free;
+				}
+
+				if (id_zns->zamds)
+					ctrl->max_zone_append_sectors =
+						1 << (id_zns->zamds +
+								page_shift - 9);
+				else
+					ctrl->max_zone_append_sectors =
+								max_hw_sectors;
+
+				kfree(id_zns);
+			}
+		}
+	}
+
 	if (!ctrl->identified)
 		nvme_hwmon_init(ctrl);
 
@@ -3883,7 +3935,7 @@ static int nvme_alloc_ns(struct nvme_ctrl *ctrl, unsigned int nsid, u8 csi)
 	blk_queue_logical_block_size(ns->queue, 1 << ns->lba_shift);
 	nvme_set_queue_limits(ctrl, ns->queue);
 
-	ret = nvme_identify_ns(ctrl, nsid, &id, NVME_ID_CNS_NS);
+	ret = nvme_identify_ns(ctrl, nsid, &id, NVME_ID_CNS_NS, ns->csi);
 	if (ret)
 		goto out_free_queue;
 
@@ -3917,11 +3969,12 @@ static int nvme_alloc_ns(struct nvme_ctrl *ctrl, unsigned int nsid, u8 csi)
 	if (ns->csi == NVME_IOCS_ZND) {
 		struct nvme_id_ns *zns_id;
 
-		ret = nvme_identify_ns(ctrl, nsid, &zns_id, NVME_IOCS_ZND);
+		ret = nvme_identify_ns(ctrl, nsid, &zns_id, NVME_ID_CNS_NS_IOCS,
+							NVME_IOCS_ZND);
 		if (ret)
 			goto out_put_disk;
 
-		ret = nvme_zns_init(ns, id, (struct nvme_id_zns *)zns_id);
+		ret = nvme_zns_init(ns, id, (struct nvme_id_ns_zns *)zns_id);
 		if (ret) {
 			dev_warn(ctrl->device, "ZNS init failure\n");
 			goto out_put_disk;
@@ -4672,8 +4725,10 @@ static inline void _nvme_check_size(void)
 	BUILD_BUG_ON(sizeof(struct nvme_get_log_page_command) != 64);
 	BUILD_BUG_ON(sizeof(struct nvme_command) != 64);
 	BUILD_BUG_ON(sizeof(struct nvme_id_ctrl) != NVME_IDENTIFY_DATA_SIZE);
+	BUILD_BUG_ON(sizeof(struct nvme_id_ctrl_zns) !=
+						NVME_IDENTIFY_DATA_SIZE);
 	BUILD_BUG_ON(sizeof(struct nvme_id_ns) != NVME_IDENTIFY_DATA_SIZE);
-	BUILD_BUG_ON(sizeof(struct nvme_id_zns) != NVME_IDENTIFY_DATA_SIZE);
+	BUILD_BUG_ON(sizeof(struct nvme_id_ns_zns) != NVME_IDENTIFY_DATA_SIZE);
 	BUILD_BUG_ON(sizeof(struct nvme_lba_range_type) != 64);
 	BUILD_BUG_ON(sizeof(struct nvme_smart_log) != 512);
 	BUILD_BUG_ON(sizeof(struct nvme_dbbuf) != 64);
