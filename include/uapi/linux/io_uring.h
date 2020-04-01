@@ -129,6 +129,8 @@ enum {
 	IORING_OP_SPLICE,
 	IORING_OP_PROVIDE_BUFFERS,
 	IORING_OP_REMOVE_BUFFERS,
+	IORING_OP_ZONE_APPEND,
+	IORING_OP_ZONE_APPEND_FIXED,
 
 	/* this goes last, obviously */
 	IORING_OP_LAST,
@@ -156,7 +158,10 @@ enum {
 struct io_uring_cqe {
 	__u64	user_data;	/* sqe->data submission passed back */
 	__s32	res;		/* result code for this event */
-	__u32	flags;
+	union {
+		__u32	offset; /* zone append completion offset in zone */
+		__u32	flags;
+	};
 };
 
 /*

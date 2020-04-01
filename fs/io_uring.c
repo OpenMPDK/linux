@@ -627,6 +627,9 @@ struct io_kiocb {
 	unsigned long		fsize;
 	u64			user_data;
 	u32			result;
+#ifdef CONFIG_BLK_DEV_ZONED
+	u32			append_offset;
+#endif
 	u32			sequence;
 
 	struct list_head	link_list;
@@ -853,6 +856,18 @@ static const struct io_op_def io_op_defs[] = {
 	},
 	[IORING_OP_PROVIDE_BUFFERS] = {},
 	[IORING_OP_REMOVE_BUFFERS] = {},
+	[IORING_OP_ZONE_APPEND] = {
+		.async_ctx		= 1,
+		.needs_mm		= 1,
+		.needs_file		= 1,
+		.hash_reg_file		= 1,
+		.unbound_nonreg_file	= 1,
+	},
+	[IORING_OP_ZONE_APPEND_FIXED] = {
+		.needs_file		= 1,
+		.hash_reg_file		= 1,
+		.unbound_nonreg_file	= 1,
+	},
 };
 
 static void io_wq_submit_work(struct io_wq_work **workptr);
@@ -1244,7 +1259,15 @@ static void __io_cqring_fill_event(struct io_kiocb *req, long res, long cflags)
 	if (likely(cqe)) {
 		WRITE_ONCE(cqe->user_data, req->user_data);
 		WRITE_ONCE(cqe->res, res);
+#ifdef CONFIG_BLK_DEV_ZONED
+		if (req->opcode == IORING_OP_ZONE_APPEND || req->opcode ==
+				IORING_OP_ZONE_APPEND_FIXED)
+			WRITE_ONCE(cqe->offset, req->append_offset);
+		else
+			WRITE_ONCE(cqe->flags, cflags);
+#else
 		WRITE_ONCE(cqe->flags, cflags);
+#endif
 	} else if (ctx->cq_overflow_flushed) {
 		WRITE_ONCE(ctx->rings->cq_overflow,
 				atomic_inc_return(&ctx->cached_cq_overflow));
@@ -1934,6 +1957,9 @@ static void io_complete_rw_common(struct kiocb *kiocb, long res)
 static void io_complete_rw(struct kiocb *kiocb, long res, long res2)
 {
 	struct io_kiocb *req = container_of(kiocb, struct io_kiocb, rw.kiocb);
+#ifdef CONFIG_BLK_DEV_ZONED
+	req->append_offset = (u32)res2;
+#endif
 
 	io_complete_rw_common(kiocb, res);
 	io_put_req(req);
@@ -1949,6 +1975,9 @@ static void io_complete_rw_iopoll(struct kiocb *kiocb, long res, long res2)
 	if (res != req->result)
 		req_set_fail_links(req);
 	req->result = res;
+#ifdef CONFIG_BLK_DEV_ZONED
+	req->append_offset = (u32)res2;
+#endif
 	if (res != -EAGAIN)
 		req->flags |= REQ_F_IOPOLL_COMPLETED;
 }
@@ -2369,7 +2398,8 @@ static ssize_t io_import_iovec(int rw, struct io_kiocb *req,
 	u8 opcode;
 
 	opcode = req->opcode;
-	if (opcode == IORING_OP_READ_FIXED || opcode == IORING_OP_WRITE_FIXED) {
+	if (opcode == IORING_OP_READ_FIXED || opcode == IORING_OP_WRITE_FIXED ||
+			opcode == IORING_OP_ZONE_APPEND_FIXED) {
 		*iovec = NULL;
 		return io_import_fixed(req, rw, iter);
 	}
@@ -2665,6 +2695,9 @@ static int io_write(struct io_kiocb *req, bool force_nonblock)
 		req->rw.kiocb.ki_flags &= ~IOCB_NOWAIT;
 
 	req->result = 0;
+#ifdef CONFIG_BLK_DEV_ZONED
+	req->append_offset = 0;
+#endif
 	io_size = ret;
 	if (req->flags & REQ_F_LINK_HEAD)
 		req->result = io_size;
@@ -2699,6 +2732,12 @@ static int io_write(struct io_kiocb *req, bool force_nonblock)
 			__sb_writers_release(file_inode(req->file)->i_sb,
 						SB_FREEZE_WRITE);
 		}
+#ifdef CONFIG_BLK_DEV_ZONED
+		if (req->opcode == IORING_OP_ZONE_APPEND || req->opcode ==
+				IORING_OP_ZONE_APPEND_FIXED)
+			kiocb->ki_flags |= IOCB_ZONE_APPEND;
+#endif
+
 		kiocb->ki_flags |= IOCB_WRITE;
 
 		if (!force_nonblock)
@@ -4927,6 +4966,12 @@ static int io_req_defer_prep(struct io_kiocb *req,
 	case IORING_OP_WRITEV:
 	case IORING_OP_WRITE_FIXED:
 	case IORING_OP_WRITE:
+#ifdef CONFIG_BLK_DEV_ZONED
+	/* fallthrough */
+	case IORING_OP_ZONE_APPEND:
+	/* fallthrough */
+	case IORING_OP_ZONE_APPEND_FIXED:
+#endif
 		ret = io_write_prep(req, sqe, true);
 		break;
 	case IORING_OP_POLL_ADD:
@@ -5055,6 +5100,12 @@ static void io_cleanup_req(struct io_kiocb *req)
 	case IORING_OP_WRITEV:
 	case IORING_OP_WRITE_FIXED:
 	case IORING_OP_WRITE:
+#ifdef CONFIG_BLK_DEV_ZONED
+	/* fallthrough */
+	case IORING_OP_ZONE_APPEND:
+	/* fallthrough */
+	case IORING_OP_ZONE_APPEND_FIXED:
+#endif
 		if (io->rw.iov != io->rw.fast_iov)
 			kfree(io->rw.iov);
 		break;
@@ -5104,6 +5155,10 @@ static int io_issue_sqe(struct io_kiocb *req, const struct io_uring_sqe *sqe,
 		}
 		ret = io_read(req, force_nonblock);
 		break;
+#ifdef CONFIG_BLK_DEV_ZONED
+	case IORING_OP_ZONE_APPEND:
+	case IORING_OP_ZONE_APPEND_FIXED:
+#endif
 	case IORING_OP_WRITEV:
 	case IORING_OP_WRITE_FIXED:
 	case IORING_OP_WRITE:
