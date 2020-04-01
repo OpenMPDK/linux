@@ -319,7 +319,9 @@ static void blkdev_bio_end_io(struct bio *bio)
 				iocb->ki_pos += ret;
 #ifdef CONFIG_BLK_DEV_ZONED
 				if (iocb->ki_flags & IOCB_ZONE_APPEND)
-					res = bio->bi_iter.bi_sector << SECTOR_SHIFT;
+					res = (bio->bi_iter.bi_sector %
+						blk_queue_zone_sectors(bio->bi_disk->queue))
+						<< SECTOR_SHIFT;
 #endif
 			} else {
 				ret = blk_status_to_errno(dio->bio.bi_status);
