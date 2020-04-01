@@ -299,6 +299,12 @@ static int blkdev_iopoll(struct kiocb *kiocb, bool wait)
 	return blk_poll(q, READ_ONCE(kiocb->ki_cookie), wait);
 }
 
+static inline long blkdev_bio_end_io_append(struct bio *bio)
+{
+	return (bio->bi_iter.bi_sector %
+		blk_queue_zone_sectors(bio->bi_disk->queue)) << SECTOR_SHIFT;
+}
+
 static void blkdev_bio_end_io(struct bio *bio)
 {
 	struct blkdev_dio *dio = bio->bi_private;
@@ -318,8 +324,7 @@ static void blkdev_bio_end_io(struct bio *bio)
 				iocb->ki_pos += ret;
 #ifdef CONFIG_BLK_DEV_ZONED
 				if (iocb->ki_flags & IOCB_ZONE_APPEND)
-					res = bio->bi_iter.bi_sector <<
-								SECTOR_SHIFT;
+					res = blkdev_bio_end_io_append(bio);
 #endif
 			} else {
 				ret = blk_status_to_errno(dio->bio.bi_status);
