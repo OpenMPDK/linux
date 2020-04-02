@@ -299,7 +299,7 @@ enum req_opf {
 	/* Transition a zone to offline */
 	REQ_OP_ZONE_OFFLINE	= 13,
 	/* copy ranges within device */
-	REQ_OP_COPY		= 14,
+	REQ_OP_COPY		= 15,
 
 	/* SCSI passthrough using struct scsi_request */
 	REQ_OP_SCSI_IN		= 32,
