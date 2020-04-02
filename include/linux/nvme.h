@@ -309,11 +309,10 @@ struct nvme_id_ctrl {
 	__u8			nvscc;
 	__u8			nwpc;
 	__le16			acwu;
-	__u8			rsvd535[2];
+	__le16			ocfs;
 	__le32			sgls;
 	__le32			mnan;
-	__le16			ocfs;
-	__u8                    rsvd546[222];
+	__u8                    rsvd544[224];
 	char			subnqn[256];
 	__u8			rsvd1024[768];
 	__le32			ioccsz;
@@ -382,11 +381,7 @@ struct nvme_id_ns {
 	__le16			npdg;
 	__le16			npda;
 	__le16			nows;
-	__u8			rsvd74[2];
-	__le32			mcl;
-	__le16			mssrl;
-	__u8			msrc;
-	__u8			rsvd83[9];
+	__u8			rsvd74[18];
 	__le32			anagrpid;
 	__u8			rsvd96[3];
 	__u8			nsattr;
@@ -395,7 +390,10 @@ struct nvme_id_ns {
 	__u8			nguid[16];
 	__u8			eui64[8];
 	struct nvme_lbaf	lbaf[16];
-	__u8			rsvd192[192];
+	__le32			mcl;
+	__le16			mssrl;
+	__u8			msrc;
+	__u8			rsvd192[185];
 	__u8			vs[3712];
 };
 
