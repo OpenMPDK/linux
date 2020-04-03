@@ -138,8 +138,12 @@ struct blk_zone_dev {
 	__u32	rrl;
 	__u32	frl;
 	__u8	zoc;
-	__u8	rsv19[7];
-	__u64	rsv63[2];
+	__u8	rsv17[2];
+	__u8	zrwacap;
+	__u32	mrwz;
+	__u32	rwanvms;
+	__u32	zrwacg;
+	__u32	zrwas;
 };
 
 /**
@@ -151,10 +155,12 @@ enum blk_zone_action {
 	BLK_ZONE_MGMT_OPEN	= 0x3,
 	BLK_ZONE_MGMT_RESET	= 0x4,
 	BLK_ZONE_MGMT_OFFLINE	= 0x5,
+	BLK_ZONE_MGMT_COMMIT	= 0x11,
 };
 
 enum blk_zone_mgmt_flags {
 	BLK_ZONE_SELECT_ALL	= 1 << 0,
+	BLK_ZONE_RWA		= 1 << 1,
 };
 
 /**
