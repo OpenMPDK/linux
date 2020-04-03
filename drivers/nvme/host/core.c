@@ -334,6 +334,11 @@ static int __nvme_zns_report_prop(struct nvme_ns *ns,
 	zprop->rrl = ns->rrl;
 	zprop->frl = ns->frl;
 	zprop->zoc = ns->zoc;
+	zprop->zrwas = ns->zrwas;
+	zprop->zrwacap = ns->ctrl->zrwacap;
+	zprop->mrwz = ns->ctrl->mrwz;
+	zprop->rwanvms = ns->ctrl->rwanvms;
+	zprop->zrwacg = (ns->ctrl->zrwacg << (ns->lba_shift - 9));
 
 	return 0;
 }
@@ -374,6 +379,7 @@ static int nvme_zns_init(struct nvme_ns *ns, struct nvme_id_ns *id,
 	ns->rrl = le32_to_cpu(zns_id->rrl);
 	ns->frl = le32_to_cpu(zns_id->frl);
 	ns->zoc = le16_to_cpu(zns_id->zoc);
+	ns->zrwas = le32_to_cpu(zns_id->zrwas) << (ns->lba_shift - 9);
 
 	ns->zones = kvzalloc(ns->nr_zones * sizeof(struct blk_zone),
 								GFP_KERNEL);
@@ -1075,7 +1081,28 @@ static inline blk_status_t nvme_setup_zmgmt_send(struct nvme_ns *ns,
 		break;
 	case REQ_OP_ZONE_OPEN:
 		cmnd->zmgmt_send.zsa = NVME_CMD_ZONE_MGMT_SEND_OPEN;
+#ifdef CONFIG_BLK_DEV_ZONED
+		if ((req->bio)->bi_opf & REQ_ZONE_ZRWA) {
+			if (ns->ctrl->zrwacap & NVME_ZNS_ZRWASUP)
+				cmnd->zmgmt_send.zflags |=
+						NVME_CMD_ZONE_MGMT_SEND_ZRWA;
+			else {
+				dev_warn(ns->ctrl->device,
+					"ZRWA is not supported\n");
+				return BLK_STS_NOTSUPP;
+			}
+		}
 		break;
+	case REQ_OP_ZONE_COMMIT:
+		if (ns->ctrl->zrwacap & NVME_ZNS_EXPCOMSUP)
+			cmnd->zmgmt_send.zsa = NVME_CMD_ZONE_MGMT_SEND_COMMIT;
+		else {
+			dev_warn(ns->ctrl->device,
+				"ZRWA explicit commit is not supported\n");
+			return BLK_STS_NOTSUPP;
+		}
+		break;
+#endif
 	case REQ_OP_ZONE_RESET:
 		cmnd->zmgmt_send.zsa = NVME_CMD_ZONE_MGMT_SEND_RESET;
 		break;
@@ -1138,6 +1165,7 @@ blk_status_t nvme_setup_cmd(struct nvme_ns *ns, struct request *req,
 	case REQ_OP_ZONE_OPEN:
 	case REQ_OP_ZONE_RESET:
 	case REQ_OP_ZONE_OFFLINE:
+	case REQ_OP_ZONE_COMMIT:
 		ret = nvme_setup_zmgmt_send(ns, req, cmd);
 		break;
 	default:
@@ -3542,6 +3570,15 @@ int nvme_init_identify(struct nvme_ctrl *ctrl)
 				else
 					ctrl->max_zone_append_sectors =
 								max_hw_sectors;
+
+#ifdef CONFIG_BLK_DEV_ZONED
+				ctrl->zrwacap = id_zns->zrwacap;
+				ctrl->mrwz = le32_to_cpu(id_zns->mrwz);
+				ctrl->zrwacg =
+					(le32_to_cpu(id_zns->zrwacg)) + 1;
+				ctrl->rwanvms =
+					le32_to_cpu(id_zns->rwanvms) >> 9;
+#endif
 
 				kfree(id_zns);
 			}

@@ -283,6 +283,13 @@ struct nvme_ctrl {
 	struct work_struct ana_work;
 #endif
 
+#ifdef CONFIG_BLK_DEV_ZONED
+	u8 zrwacap;
+	u32 mrwz;
+	u32 rwanvms;
+	u32 zrwacg;
+#endif
+
 	/* Power saving configuration */
 	u64 ps_max_latency_us;
 	bool apst_enabled;
@@ -419,6 +426,7 @@ struct nvme_ns {
 	u32 rrl;
 	u32 frl;
 	u16 zoc;
+	u32 zrwas;
 #endif
 };
 

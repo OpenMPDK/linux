@@ -298,6 +298,8 @@ enum req_opf {
 	REQ_OP_ZONE_FINISH	= 12,
 	/* Transition a zone to offline */
 	REQ_OP_ZONE_OFFLINE	= 13,
+	/* commit buffered data on zone */
+	REQ_OP_ZONE_COMMIT      = 14,
 	/* copy ranges within device */
 	REQ_OP_COPY		= 15,
 
@@ -339,6 +341,7 @@ enum req_flag_bits {
 
 	__REQ_ZONE_ALL,		/* apply zone operation to all zones */
 	__REQ_ZONE_APPEND,	/* zoned device specific write append  */
+	__REQ_ZONE_ZRWA,	/* use zone random write area */
 
 	/* command specific flags for REQ_OP_WRITE_ZEROES: */
 	__REQ_NOUNMAP,		/* do not free blocks when zeroing */
@@ -369,6 +372,7 @@ enum req_flag_bits {
 #define REQ_CGROUP_PUNT		(1ULL << __REQ_CGROUP_PUNT)
 #define REQ_ZONE_ALL		(1ULL << __REQ_ZONE_ALL)
 #define REQ_ZONE_APPEND		(1ULL << __REQ_ZONE_APPEND)
+#define REQ_ZONE_ZRWA		(1ULL << __REQ_ZONE_ZRWA)
 #define REQ_NOUNMAP		(1ULL << __REQ_NOUNMAP)
 #define REQ_HIPRI		(1ULL << __REQ_HIPRI)
 
@@ -451,6 +455,7 @@ static inline bool op_is_zone_mgmt(enum req_opf op)
 	case REQ_OP_ZONE_CLOSE:
 	case REQ_OP_ZONE_FINISH:
 	case REQ_OP_ZONE_OFFLINE:
+	case REQ_OP_ZONE_COMMIT:
 		return true;
 	default:
 		return false;

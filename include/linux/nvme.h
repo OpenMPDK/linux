@@ -223,9 +223,21 @@ struct nvme_zns_lba_fe {
 	__u8			rsvd9[7];
 };
 
+/* ZNS, ZRWA capability flags */
+enum nvme_zrwa_cap {
+	NVME_ZNS_ZRWASUP = 1 << 0,
+	NVME_ZNS_EXPCOMSUP = 1 << 1,
+	NVME_ZNS_IMPCOMSUP = 1 << 2,
+};
+
 struct nvme_id_ctrl_zns {
-	uint8_t zamds;
-	uint8_t rsvd[4095];
+	__u8			zamds;
+	__u8			zrwacap;
+	__u8			rsvd2[2];
+	__le32			mrwz;
+	__le32			rwanvms;
+	__le32			zrwacg;
+	__u8			rsvd16[4080];
 };
 
 struct nvme_id_ns_zns {
@@ -237,7 +249,8 @@ struct nvme_id_ns_zns {
 	__u8			rsvd24[8];
 	__le32			rrl;
 	__le32			frl;
-	__u8			rsvd40[3544];
+	__le32			zrwas;
+	__u8			rsvd44[3540];
 	struct nvme_zns_lba_fe	lbafe[16];
 	__u8			vs[256];
 };
@@ -1191,12 +1204,14 @@ enum {
 
 #define NVME_ZONE_ZA_ZFC(za)		((za) & (0x1 << 0))
 #define NVME_ZONE_ZA_ZFR(za)		((za) & (0x1 << 1))
+#define NVME_ZONE_ZA_ZRWA(za)		((za) & (0x1 << 2))
 #define NVME_ZONE_ZA_RZR(za)		((za) & (0x1 << 5))
 #define NVME_ZONE_ZA_ZDV(za)		((za) & (0x1 << 6))
 
 enum {
 	NVME_ZONE_ZA_ZFC	= 1 << 0,
 	NVME_ZONE_ZA_ZFR	= 1 << 1,
+	NVME_ZONE_ZA_ZRWA	= 1 << 2,
 	NVME_ZONE_ZA_RZR	= 1 << 5,
 	NVME_ZONE_ZA_ZDV	= 1 << 6,
 };
@@ -1405,8 +1420,10 @@ enum {
 	NVME_CMD_ZONE_MGMT_SEND_OFFLINE		= 0x5,
 
 	NVME_CMD_ZONE_MGMT_SEND_SZD		= 0x10,
+	NVME_CMD_ZONE_MGMT_SEND_COMMIT		= 0x11,
 
 	NVME_CMD_ZONE_MGMT_SEND_ALL		= 0x1,
+	NVME_CMD_ZONE_MGMT_SEND_ZRWA		= 0x2,
 
 	/* Receive */
 	NVME_CMD_ZONE_MGMT_RCV_REPORT_ZONES	= 0x0,
