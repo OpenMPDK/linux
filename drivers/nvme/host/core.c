@@ -277,7 +277,7 @@ static int nvme_zns_update(struct nvme_ns *ns)
 						&ns->zones[i + zone_off]);
 		}
 
-		slba += zone_report->nr_zones * ns->zone_secs;
+		slba += zone_report->nr_zones * ns->zone_sz_lb;
 		zone_off += zone_report->nr_zones;
 	}
 
@@ -300,7 +300,7 @@ static int __nvme_zns_zone_report(struct nvme_ns *ns, sector_t sector,
 	if (ret)
 		return ret;
 
-	zno = sector >> ilog2(ns->zone_secs);
+	zno = sector >> ilog2(nvme_lba_to_sect(ns, ns->zone_sz_lb));
 	if (zno < ns->nr_zones) {
 		nrz = min_t(unsigned int, nr_zones, ns->nr_zones - zno);
 
@@ -354,7 +354,7 @@ static void nvme_config_zoned(struct gendisk *disk, struct nvme_ns *ns)
 {
 	struct request_queue *queue = disk->queue;
 
-	blk_queue_chunk_sectors(queue, ns->zone_secs << (ns->lba_shift - 9));
+	blk_queue_chunk_sectors(queue, ns->zone_sz_lb << (ns->lba_shift - 9));
 	queue->limits.zoned = BLK_ZONED_HM;
 	queue->nr_zones = ns->nr_zones;
 }
@@ -365,7 +365,8 @@ static int nvme_zns_init(struct nvme_ns *ns, struct nvme_id_ns *id,
 	int ret;
 
 	ns->is_zoned = true;
-	ns->zone_secs = zns_id->lbafe[id->flbas & NVME_NS_FLBAS_LBA_MASK].zsze;
+	ns->zone_sz_lb = le64_to_cpu(zns_id->lbafe[id->flbas &
+						NVME_NS_FLBAS_LBA_MASK].zsze);
 	ns->zds = zns_id->lbafe[id->flbas & NVME_NS_FLBAS_LBA_MASK].zdes << 6;
 
 	ret = nvme_zns_nr_zones(ns);

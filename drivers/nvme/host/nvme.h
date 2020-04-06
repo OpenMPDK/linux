@@ -415,7 +415,7 @@ struct nvme_ns {
 
 #ifdef CONFIG_BLK_DEV_ZONED
 	struct blk_zone *zones;
-	sector_t zone_secs;
+	u64 zone_sz_lb;
 	sector_t zds;
 	u64 nr_zones;
 	bool is_zoned;

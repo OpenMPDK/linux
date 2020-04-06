@@ -45,7 +45,10 @@ bool blk_req_needs_zone_write_lock(struct request *rq)
 	case REQ_OP_WRITE:
 	case REQ_OP_COPY:
 #ifdef CONFIG_BLK_DEV_ZONED
-		if (rq->cmd_flags & REQ_ZONE_APPEND)
+		if ((rq->cmd_flags & REQ_ZONE_APPEND) ||
+			(rq->q->zrwa_zones_bitmap &&
+				test_bit(blk_rq_zone_no(rq),
+						rq->q->zrwa_zones_bitmap)))
 			return false;
 #endif
 		return blk_rq_zone_is_seq(rq);
@@ -74,6 +77,32 @@ void __blk_req_zone_write_unlock(struct request *rq)
 						 rq->q->seq_zones_wlock));
 }
 EXPORT_SYMBOL_GPL(__blk_req_zone_write_unlock);
+
+void __blk_req_zone_zrwa_set(struct request_queue *q, sector_t sector)
+{
+	sector_t zone_sectors = blk_queue_zone_sectors(q);
+	long nr;
+
+	if (!blk_queue_is_zoned(q))
+		return;
+
+	nr = sector / zone_sectors;
+	WARN_ON_ONCE(test_and_set_bit(nr, q->zrwa_zones_bitmap));
+}
+EXPORT_SYMBOL_GPL(__blk_req_zone_zrwa_set);
+
+void __blk_req_zone_zrwa_clear(struct request_queue *q, sector_t sector)
+{
+	sector_t zone_sectors = blk_queue_zone_sectors(q);
+	long nr;
+
+	if (!blk_queue_is_zoned(q))
+		return;
+
+	nr = sector / zone_sectors;
+	WARN_ON_ONCE(!test_and_clear_bit(nr, q->zrwa_zones_bitmap));
+}
+EXPORT_SYMBOL_GPL(__blk_req_zone_zrwa_clear);
 
 /**
  * blkdev_nr_zones - Get number of zones
@@ -178,6 +207,7 @@ int blkdev_zone_mgmt(struct block_device *bdev, enum req_opf op,
 	sector_t capacity = get_capacity(bdev->bd_disk);
 	sector_t end_sector = sector + nr_sectors;
 	struct bio *bio = NULL;
+	long nr = sector / zone_sectors;
 	int ret;
 
 	if (!blk_queue_is_zoned(q))
@@ -226,6 +256,14 @@ int blkdev_zone_mgmt(struct block_device *bdev, enum req_opf op,
 	}
 
 	ret = submit_bio_wait(bio);
+	if (!ret && q->zrwa_zones_bitmap) {
+		if (op & REQ_ZONE_ZRWA)
+			__blk_req_zone_zrwa_set(q, nr * zone_sectors);
+		else if (((op & REQ_OP_ZONE_CLOSE) ||
+				(op & REQ_OP_ZONE_RESET)) &&
+				test_bit(nr, q->zrwa_zones_bitmap))
+			__blk_req_zone_zrwa_clear(q, nr * zone_sectors);
+	}
 	bio_put(bio);
 
 	return ret;
@@ -451,6 +489,8 @@ void blk_queue_free_zone_bitmaps(struct request_queue *q)
 {
 	kfree(q->conv_zones_bitmap);
 	q->conv_zones_bitmap = NULL;
+	kfree(q->zrwa_zones_bitmap);
+	q->zrwa_zones_bitmap = NULL;
 	kfree(q->seq_zones_wlock);
 	q->seq_zones_wlock = NULL;
 }
@@ -458,6 +498,7 @@ void blk_queue_free_zone_bitmaps(struct request_queue *q)
 struct blk_revalidate_zone_args {
 	struct gendisk	*disk;
 	unsigned long	*conv_zones_bitmap;
+	unsigned long   *zrwa_zones_bitmap;
 	unsigned long	*seq_zones_wlock;
 	unsigned int	nr_zones;
 	sector_t	zone_sectors;
@@ -521,6 +562,12 @@ static int blk_revalidate_zone_cb(struct blk_zone *zone, unsigned int idx,
 			if (!args->seq_zones_wlock)
 				return -ENOMEM;
 		}
+		if (!args->zrwa_zones_bitmap) {
+			args->zrwa_zones_bitmap =
+				blk_alloc_zone_bitmap(q->node, args->nr_zones);
+			if (!args->zrwa_zones_bitmap)
+				return -ENOMEM;
+		}
 		break;
 	default:
 		pr_warn("%s: Invalid zone type 0x%x at sectors %llu\n",
@@ -575,6 +622,7 @@ int blk_revalidate_disk_zones(struct gendisk *disk)
 		blk_queue_chunk_sectors(q, args.zone_sectors);
 		q->nr_zones = args.nr_zones;
 		swap(q->seq_zones_wlock, args.seq_zones_wlock);
+		swap(q->zrwa_zones_bitmap, args.zrwa_zones_bitmap);
 		swap(q->conv_zones_bitmap, args.conv_zones_bitmap);
 		ret = 0;
 	} else {
@@ -584,6 +632,7 @@ int blk_revalidate_disk_zones(struct gendisk *disk)
 	blk_mq_unfreeze_queue(q);
 
 	kfree(args.seq_zones_wlock);
+	kfree(args.zrwa_zones_bitmap);
 	kfree(args.conv_zones_bitmap);
 	return ret;
 }
