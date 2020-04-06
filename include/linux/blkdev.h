@@ -535,6 +535,7 @@ struct request_queue {
 	 */
 	unsigned int		nr_zones;
 	unsigned long		*conv_zones_bitmap;
+	unsigned long		*zrwa_zones_bitmap;
 	unsigned long		*seq_zones_wlock;
 #endif /* CONFIG_BLK_DEV_ZONED */
 
