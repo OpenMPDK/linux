@@ -223,6 +223,13 @@ struct nvme_zns_lba_fe {
 	__u8			rsvd9[7];
 };
 
+/* ZNS, ZRWA capability flags */
+enum nvme_zrwa_cap {
+	NVME_ZNS_ZRWASUP = 1 << 0,
+	NVME_ZNS_EXPCOMSUP = 1 << 1,
+	NVME_ZNS_IMPCOMSUP = 1 << 2,
+};
+
 struct nvme_id_ctrl_zns {
 	__u8			zamds;
 	__u8			zrwacap;
