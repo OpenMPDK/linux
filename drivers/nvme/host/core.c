@@ -1086,8 +1086,16 @@ static inline blk_status_t nvme_setup_zmgmt_send(struct nvme_ns *ns,
 		break;
 	case REQ_OP_ZONE_OPEN:
 		cmnd->zmgmt_send.zsa = NVME_CMD_ZONE_MGMT_SEND_OPEN;
-		if ((req->bio)->bi_opf & REQ_ZONE_ZRWA)
-			cmnd->zmgmt_send.zflags |= NVME_CMD_ZONE_MGMT_SEND_ZRWA;
+		if ((req->bio)->bi_opf & REQ_ZONE_ZRWA) {
+			if (ns->ctrl->zrwacap & NVME_ZNS_ZRWASUP)
+				cmnd->zmgmt_send.zflags |=
+						NVME_CMD_ZONE_MGMT_SEND_ZRWA;
+			else {
+				dev_warn(ns->ctrl->device,
+					"ZRWA is not supported\n");
+				return BLK_STS_NOTSUPP;
+			}
+		}
 		break;
 	case REQ_OP_ZONE_RESET:
 		cmnd->zmgmt_send.zsa = NVME_CMD_ZONE_MGMT_SEND_RESET;
@@ -1096,7 +1104,13 @@ static inline blk_status_t nvme_setup_zmgmt_send(struct nvme_ns *ns,
 		cmnd->zmgmt_send.zsa = NVME_CMD_ZONE_MGMT_SEND_OFFLINE;
 		break;
 	case REQ_OP_ZONE_COMMIT:
-		cmnd->zmgmt_send.zsa = NVME_CMD_ZONE_MGMT_SEND_COMMIT;
+		if (ns->ctrl->zrwacap & NVME_ZNS_EXPCOMSUP)
+			cmnd->zmgmt_send.zsa = NVME_CMD_ZONE_MGMT_SEND_COMMIT;
+		else {
+			dev_warn(ns->ctrl->device,
+				"ZRWA explicit commit is not supported\n");
+			return BLK_STS_NOTSUPP;
+		}
 		break;
 	default:
 		WARN_ON_ONCE(1);
