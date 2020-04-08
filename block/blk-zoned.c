@@ -185,36 +185,6 @@ static inline bool blkdev_allow_reset_all_zones(struct block_device *bdev,
 	return !sector && nr_sectors == get_capacity(bdev->bd_disk);
 }
 
-int blkdev_zone_commit(struct block_device *bdev, int op,
-			void __user *ubuf, sector_t nr_sectors,
-			gfp_t gfp_mask)
-{
-	struct bio *bio = NULL;
-	u64 *elba_list;
-	int ret;
-
-	if (nr_sectors > 1)
-		return -EFAULT;
-
-	elba_list = kmalloc_array(nr_sectors, sizeof(u64), GFP_KERNEL);
-	if (!elba_list)
-		return -ENOMEM;
-
-	if (copy_from_user(elba_list, ubuf, sizeof(u64) * nr_sectors))
-		return -EFAULT;
-
-	bio = blk_next_bio(bio, 0, gfp_mask);
-	bio->bi_iter.bi_sector = elba_list[0];
-	bio_set_dev(bio, bdev);
-	bio->bi_opf = op | REQ_SYNC | REQ_NOMERGE;
-
-	ret = submit_bio_wait(bio);
-	bio_put(bio);
-
-	kfree(elba_list);
-	return ret;
-}
-
 /**
  * blkdev_zone_mgmt - Execute a zone management operation on a range of zones
  * @bdev:	Target block device
@@ -251,20 +221,18 @@ int blkdev_zone_mgmt(struct block_device *bdev, enum req_opf op,
 	if (!op_is_zone_mgmt(op))
 		return -EOPNOTSUPP;
 
-	if (op == REQ_OP_ZONE_COMMIT)
-		return blkdev_zone_commit(bdev, op, (void __user *)sector,
-						nr_sectors, gfp_mask);
+	if (op != REQ_OP_ZONE_COMMIT) {
+		if (end_sector <= sector || end_sector > capacity)
+			/* Out of range */
+			return -EINVAL;
 
-	if (end_sector <= sector || end_sector > capacity)
-		/* Out of range */
-		return -EINVAL;
+		/* Check alignment (handle eventual smaller last zone) */
+		if (sector & (zone_sectors - 1))
+			return -EINVAL;
 
-	/* Check alignment (handle eventual smaller last zone) */
-	if (sector & (zone_sectors - 1))
-		return -EINVAL;
-
-	if ((nr_sectors & (zone_sectors - 1)) && end_sector != capacity)
-		return -EINVAL;
+		if (nr_sectors & (zone_sectors - 1) && end_sector != capacity)
+			return -EINVAL;
+	}
 
 	while (sector < end_sector) {
 		bio = blk_next_bio(bio, 0, gfp_mask);
