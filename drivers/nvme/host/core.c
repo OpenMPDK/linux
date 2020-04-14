@@ -232,7 +232,8 @@ static int nvme_zns_update(struct nvme_ns *ns)
 
 	max_sz = ctrl->max_hw_sectors << 9;
 	nr_zones = min_t(u64, ns->nr_zones,
-				max_sz / sizeof(struct nvme_zone_desc));
+				(max_sz-sizeof(struct nvme_zone_report))
+				 / sizeof(struct nvme_zone_desc));
 	buf_sz = sizeof(struct nvme_zone_report) +
 				nr_zones * sizeof(struct nvme_zone_desc);
 
@@ -365,7 +366,8 @@ static int nvme_zns_init(struct nvme_ns *ns, struct nvme_id_ns *id,
 	int ret;
 
 	ns->is_zoned = true;
-	ns->zone_secs = zns_id->lbafe[id->flbas & NVME_NS_FLBAS_LBA_MASK].zsze;
+	ns->zone_secs = zns_id->lbafe[id->flbas & NVME_NS_FLBAS_LBA_MASK].zsze
+					 >> ns->lba_shift;
 	ns->zds = zns_id->lbafe[id->flbas& NVME_NS_FLBAS_LBA_MASK].zdes << 6;
 
 	ret = nvme_zns_nr_zones(ns);
