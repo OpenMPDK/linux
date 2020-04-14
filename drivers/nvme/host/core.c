@@ -228,18 +228,33 @@ static int nvme_zns_update(struct nvme_ns *ns)
 	struct nvme_ctrl *ctrl = ns->ctrl;
 	void *buf;
 	sector_t slba = 0;
-	int buf_sz, max_sz, zone_off = 0;
-	int nr_zones, ret;
+	u64 min_sz, buf_sz, max_sz, zone_off = 0, max_hw_bytes;
+	int ret;
 
-	max_sz = ctrl->max_hw_sectors << 9;
-	nr_zones = min_t(u64, ns->nr_zones,
-				max_sz / sizeof(struct nvme_zone_desc));
-	buf_sz = sizeof(struct nvme_zone_report) +
-				nr_zones * sizeof(struct nvme_zone_desc);
+	min_sz = sizeof(struct nvme_zone_report) +
+				sizeof(struct nvme_zone_desc);
+	max_sz = sizeof(struct nvme_zone_report) +
+				ns->nr_zones * sizeof(struct nvme_zone_desc);
 
-	buf = kmalloc(buf_sz, GFP_KERNEL);
-	if (!buf)
-		return -ENOMEM;
+	/* keep the buffer under device-specific limits */
+	max_hw_bytes = queue_max_hw_sectors(ns->queue) << 9;
+	max_sz = min_not_zero(max_sz, max_hw_bytes);
+	buf_sz = max_sz;
+
+	/* try to deal with potential allocation failure */
+	while (1) {
+		buf = kmalloc(buf_sz, GFP_KERNEL);
+		if (buf)
+			break;
+
+		buf_sz /= 2;
+		if (buf_sz <= min_sz) {
+			ret = -ENOMEM;
+			dev_warn(ctrl->device,
+				"memory allocation failure (%d)\n", ret);
+			return ret;
+		}
+	}
 
 	while (zone_off < ns->nr_zones) {
 		struct nvme_zone_report *zone_report;
