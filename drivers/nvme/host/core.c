@@ -1585,7 +1585,8 @@ static int nvme_identify_ns_list(struct nvme_ctrl *dev, unsigned nsid,
 }
 
 static int nvme_identify_ns(struct nvme_ctrl *ctrl,
-		unsigned nsid, struct nvme_id_ns **id, unsigned csi)
+		unsigned nsid, struct nvme_id_ns **id,
+		unsigned cns, unsigned csi)
 {
 	struct nvme_command c = { };
 	int error;
@@ -1593,12 +1594,10 @@ static int nvme_identify_ns(struct nvme_ctrl *ctrl,
 	/* gcc-4.4.4 (at least) has issues with initializers and anon unions */
 	c.identify.opcode = nvme_admin_identify;
 	c.identify.nsid = cpu_to_le32(nsid);
-	c.identify.csi = csi;
+	c.identify.cns = cns;
 
-	if (csi == NVME_IOCS_NVM)
-		c.identify.cns = NVME_ID_CNS_NS;
-	else
-		c.identify.cns = NVME_ID_CNS_NS_IOCS;
+	if (cns == NVME_ID_CNS_NS_IOCS)
+		c.identify.csi = csi;
 
 	*id = kmalloc(sizeof(**id), GFP_KERNEL);
 	if (!*id)
@@ -2367,7 +2366,8 @@ static int nvme_revalidate_disk(struct gendisk *disk)
 		return -ENODEV;
 	}
 
-	ret = nvme_identify_ns(ctrl, ns->head->ns_id, &id, ns->csi);
+	ret = nvme_identify_ns(ctrl, ns->head->ns_id, &id, NVME_ID_CNS_NS,
+								ns->csi);
 	if (ret)
 		goto out;
 
@@ -4152,7 +4152,7 @@ static int nvme_alloc_ns(struct nvme_ctrl *ctrl, unsigned nsid, u8 csi)
 	blk_queue_logical_block_size(ns->queue, 1 << ns->lba_shift);
 	nvme_set_queue_limits(ctrl, ns->queue);
 
-	ret = nvme_identify_ns(ctrl, nsid, &id, NVME_ID_CNS_NS);
+	ret = nvme_identify_ns(ctrl, nsid, &id, NVME_ID_CNS_NS, ns->csi);
 	if (ret)
 		goto out_free_queue;
 
@@ -4186,7 +4186,8 @@ static int nvme_alloc_ns(struct nvme_ctrl *ctrl, unsigned nsid, u8 csi)
 	if (ns->csi == NVME_IOCS_ZND) {
 		struct nvme_id_ns *zns_id;
 
-		ret = nvme_identify_ns(ctrl, nsid, &zns_id, NVME_IOCS_ZND);
+		ret = nvme_identify_ns(ctrl, nsid, &zns_id, NVME_ID_CNS_NS_IOCS,
+							NVME_IOCS_ZND);
 		if (ret)
 			goto out_put_disk;
 
