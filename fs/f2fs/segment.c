@@ -4374,8 +4374,9 @@ static int check_zone_write_pointer(struct f2fs_sb_info *sbi,
 				    struct f2fs_dev_info *fdev,
 				    struct blk_zone *zone)
 {
-	unsigned int wp_segno, wp_blkoff, zone_secno, zone_segno, segno;
-	block_t zone_block, wp_block, last_valid_block;
+	unsigned int wp_segno, wp_blkoff, zone_secno, zone_segno;
+	unsigned int zone_end_segno;
+	block_t zone_block, zone_end_block, wp_block, last_valid_block;
 	unsigned int log_sectors_per_block = sbi->log_blocksize - SECTOR_SHIFT;
 	int i, s, b, ret;
 	struct seg_entry *se;
@@ -4389,6 +4390,9 @@ static int check_zone_write_pointer(struct f2fs_sb_info *sbi,
 	zone_block = fdev->start_blk + (zone->start >> log_sectors_per_block);
 	zone_segno = GET_SEGNO(sbi, zone_block);
 	zone_secno = GET_SEC_FROM_SEG(sbi, zone_segno);
+	zone_end_block = fdev->start_blk + ((zone->start + zone->len) >>
+						log_sectors_per_block) - 1;
+	zone_end_segno = GET_SEGNO(sbi, zone_end_block);
 
 	if (zone_segno >= MAIN_SEGS(sbi))
 		return 0;
@@ -4406,14 +4410,19 @@ static int check_zone_write_pointer(struct f2fs_sb_info *sbi,
 	 * Get last valid block of the zone.
 	 */
 	last_valid_block = zone_block - 1;
-	for (s = sbi->segs_per_sec - 1; s >= 0; s--) {
-		segno = zone_segno + s;
-		se = get_seg_entry(sbi, segno);
-		for (b = sbi->blocks_per_seg - 1; b >= 0; b--)
+
+	for (s = zone_end_segno; s >= zone_segno; s--) {
+		se = get_seg_entry(sbi, s);
+		for (b = sbi->blocks_per_seg - 1; b >= 0; b--) {
+			if (zone_end_block < (START_BLOCK(sbi, s) + b))
+				continue;
+			if (zone_block > (START_BLOCK(sbi, s) + b))
+				break;
 			if (f2fs_test_bit(b, se->cur_valid_map)) {
-				last_valid_block = START_BLOCK(sbi, segno) + b;
+				last_valid_block = START_BLOCK(sbi, s) + b;
 				break;
 			}
+		}
 		if (last_valid_block >= zone_block)
 			break;
 	}
