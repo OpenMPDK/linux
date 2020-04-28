@@ -170,6 +170,7 @@ static void nvme_zns_parse_zone(struct nvme_ns *ns, struct nvme_zone_desc *zd,
 	blk_zone->start = nvme_lbad_to_sec(ns, le64_to_cpu(zd->zslba));
 	blk_zone->len = nvme_lbad_to_sec(ns, le64_to_cpu(zd->zcap));
 	blk_zone->wp = nvme_lbad_to_sec(ns, le64_to_cpu(zd->wp));
+	blk_zone->size = nvme_lbad_to_sec(ns, le64_to_cpu(ns->zone_sz_lb));
 	blk_zone->type = zd->zt;
 	blk_zone->cond = (zd->zs >> 4) & 0xf;
 	blk_zone->attr = zd->za;
