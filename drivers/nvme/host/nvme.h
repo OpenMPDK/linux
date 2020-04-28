@@ -419,9 +419,14 @@ struct nvme_ns {
 #ifdef CONFIG_BLK_DEV_ZONED
 	struct blk_zone *zones;
 	u64 zone_sz_lb;
+	u64 zone_cap_lb;
+	u64 zone_sz_cap_diff;
 	sector_t zds;
 	u64 nr_zones;
 	bool is_zoned;
+
+	/* JAVIER: Hack for npo2 zone sizes */
+	bool is_zmap;
 
 	u32 mar;
 	u32 mor;
@@ -492,19 +497,36 @@ static inline sector_t nvme_lbad_to_sec(struct nvme_ns *ns, sector_t sector)
 	return (sector << (ns->lba_shift - 9));
 }
 
+static u64 nvme_zns_po22slba(u64 lba, struct nvme_ns *ns, int print)
+{
+	u64 res, zid;
+
+	zid = lba;
+	do_div(zid, ns->zone_cap_lb);
+
+	res = lba + zid * ns->zone_sz_cap_diff;
+
+	if (print)
+		printk(KERN_CRIT "lba:%llu: out_lba:%llu (zid:%llu)\n",
+			lba, res, zid);
+
+	return res;
+}
+
 static inline void nvme_update_req(struct request *req, __u16 status,
 		union nvme_result result)
 {
 #ifdef CONFIG_BLK_DEV_ZONED
 	struct nvme_ns *ns = req->q->queuedata;
+	u64 lba, po2_lba;
 
 	if (rq_is_zone_append(req)) {
-		req->__sector =
-			nvme_lbad_to_sec(ns, (sector_t)le64_to_cpu(result.u64));
+		lba = le64_to_cpu(result.u64);
+		po2_lba = nvme_zns_po22slba((sector_t)lba, ns, 0);
+		req->__sector = nvme_lbad_to_sec(ns, po2_lba);
 		return;
 	}
 #endif
-
 }
 
 static inline void nvme_end_request(struct request *req, __le16 status,

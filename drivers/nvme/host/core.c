@@ -164,13 +164,42 @@ int nvme_reset_ctrl_sync(struct nvme_ctrl *ctrl)
 EXPORT_SYMBOL_GPL(nvme_reset_ctrl_sync);
 
 #ifdef CONFIG_BLK_DEV_ZONED
+static u64 nvme_zns_slba2po2(u64 lba, struct nvme_ns *ns, int print)
+{
+	u64 res, zid;
+
+	zid = lba;
+	do_div(zid, ns->zone_sz_lb);
+
+	res = lba - zid * ns->zone_sz_cap_diff;
+
+	if (print)
+		printk(KERN_CRIT "lba:%llu: out_lba:%llu (zid:%llu)\n",
+			lba, res, zid);
+
+	return res;
+}
 
 static void nvme_zns_parse_zone(struct nvme_ns *ns, struct nvme_zone_desc *zd,
-				 struct blk_zone *blk_zone)
+				struct blk_zone *blk_zone, u64 off)
 {
-	blk_zone->start = nvme_lbad_to_sec(ns, le64_to_cpu(zd->zslba));
-	blk_zone->len = nvme_lbad_to_sec(ns, le64_to_cpu(zd->zcap));
-	blk_zone->wp = nvme_lbad_to_sec(ns, le64_to_cpu(zd->wp));
+	/* Device PO2 zones sizes */
+	if (!ns->is_zmap) {
+		blk_zone->start = nvme_lbad_to_sec(ns, le64_to_cpu(zd->zslba));
+		blk_zone->len = nvme_lbad_to_sec(ns, le64_to_cpu(zd->zcap));
+		blk_zone->wp = nvme_lbad_to_sec(ns, le64_to_cpu(zd->wp));
+
+		goto out;
+	}
+
+	/* Device !PO2 zones sizes
+	 *  - Variable capacities are not supported
+	 */
+	blk_zone->start = nvme_lbad_to_sec(ns, le64_to_cpu(zd->zslba + off));
+	blk_zone->wp = nvme_lbad_to_sec(ns, le64_to_cpu(zd->wp + off));
+	blk_zone->len = nvme_lbad_to_sec(ns, le64_to_cpu(ns->zone_cap_lb));
+
+out:
 	blk_zone->size = nvme_lbad_to_sec(ns, le64_to_cpu(ns->zone_sz_lb));
 	blk_zone->type = zd->zt;
 	blk_zone->cond = (zd->zs >> 4) & 0xf;
@@ -262,9 +291,11 @@ static int nvme_zns_update(struct nvme_ns *ns)
 		}
 	}
 
+	ns->zone_sz_cap_diff = ns->zone_sz_lb - ns->zone_cap_lb;
 	while (zone_off < ns->nr_zones) {
 		struct nvme_zone_report *zone_report;
 		struct nvme_zone_desc *zd;
+		u64 off = 0;
 		int i;
 
 		ret = nvme_zone_mgmt_rcv(ns,
@@ -295,7 +326,8 @@ static int nvme_zns_update(struct nvme_ns *ns)
 			}
 
 			nvme_zns_parse_zone(ns, &zd[i],
-						&ns->zones[i + zone_off]);
+						&ns->zones[i + zone_off], off);
+			off += ns->zone_sz_cap_diff;
 		}
 
 		slba += zone_report->nr_zones * ns->zone_sz_lb;
@@ -382,21 +414,57 @@ static void nvme_config_zoned(struct gendisk *disk, struct nvme_ns *ns)
 	queue->nr_zones = ns->nr_zones;
 }
 
+static sector_t nvme_zns_capacity(struct gendisk *disk)
+{
+	struct nvme_ns *ns = disk->private_data;
+
+	return ns->zone_sz_lb * ns->nr_zones;
+}
+
+static int nvme_zns_size_init(struct nvme_ns *ns, struct nvme_id_ns *id,
+			       struct nvme_id_ns_zns *zns_id)
+{
+	u64 zsze, zsze_po2;
+
+	zsze = le64_to_cpu(zns_id->lbafe[id->flbas &
+					NVME_NS_FLBAS_LBA_MASK].zsze);
+	zsze_po2 = 1 << get_count_order(zsze);
+
+	if (zsze_po2 == zsze) {
+		ns->is_zmap = false;
+		goto out;
+	}
+
+	ns->is_zmap = true;
+
+	/* Remove 1 zone to account for unallocated space */
+	ns->nr_zones--;
+
+out:
+	ns->zone_sz_lb = zsze_po2;
+	ns->zone_cap_lb = zsze;
+	ns->zds = zns_id->lbafe[id->flbas & NVME_NS_FLBAS_LBA_MASK].zdes << 6;
+
+	return 0;
+}
+
 static int nvme_zns_init(struct nvme_ns *ns, struct nvme_id_ns *id,
 			 struct nvme_id_ns_zns *zns_id)
 {
 	int ret;
 
 	ns->is_zoned = true;
-	ns->zone_sz_lb = le64_to_cpu(zns_id->lbafe[id->flbas &
-						NVME_NS_FLBAS_LBA_MASK].zsze);
-	ns->zds = zns_id->lbafe[id->flbas & NVME_NS_FLBAS_LBA_MASK].zdes << 6;
 
 	ret = nvme_zns_nr_zones(ns);
 	if (ret < 0)
 		return ret;
 
 	ns->nr_zones = ret;
+
+	ret = nvme_zns_size_init(ns, id, zns_id);
+	if (ret)
+		return ret;
+
 	ns->mar = le32_to_cpu(zns_id->mar);
 	ns->mor = le32_to_cpu(zns_id->mor);
 	ns->rrl = le32_to_cpu(zns_id->rrl);
@@ -941,7 +1009,17 @@ static inline blk_status_t nvme_setup_copy(struct nvme_ns *ns,
 
 	cmnd->copy.opcode = nvme_cmd_copy;
 	cmnd->copy.nsid = cpu_to_le32(ns->head->ns_id);
+
+#ifdef CONFIG_BLK_DEV_ZONED
+	if (ns->is_zmap)
+		cmnd->copy.sdlba = cpu_to_le64(nvme_zns_slba2po2(
+				blk_rq_pos(req) >> (ns->lba_shift - 9), ns, 0));
+	else
+		cmnd->copy.sdlba = cpu_to_le64(blk_rq_pos(req) >>
+				(ns->lba_shift - 9));
+#else
 	cmnd->copy.sdlba = cpu_to_le64(blk_rq_pos(req) >> (ns->lba_shift - 9));
+#endif
 
 	range = kmalloc_array(segments, sizeof(*range),
 			GFP_ATOMIC | __GFP_NOWARN);
@@ -956,7 +1034,15 @@ static inline blk_status_t nvme_setup_copy(struct nvme_ns *ns,
 		ssrl = payload[i].len;
 		ssrl = ssrl >> (ns->lba_shift - 9);
 
+#ifdef CONFIG_BLK_DEV_ZONED
+		if (ns->is_zmap)
+			range[nr_range].slba =
+				cpu_to_le64(nvme_zns_slba2po2(slba, ns, 0));
+		else
+			range[nr_range].slba = cpu_to_le64(slba);
+#else
 		range[nr_range].slba = cpu_to_le64(slba);
+#endif
 		range[nr_range].nlb = cpu_to_le16(ssrl - 1);
 
 		nr_range++;
@@ -1008,8 +1094,18 @@ static blk_status_t nvme_setup_discard(struct nvme_ns *ns, struct request *req,
 	}
 
 	__rq_for_each_bio(bio, req) {
-		u64 slba = nvme_sect_to_lba(ns, bio->bi_iter.bi_sector);
 		u32 nlb = bio->bi_iter.bi_size >> ns->lba_shift;
+#ifdef CONFIG_BLK_DEV_ZONED
+		u64 slba;
+
+		if (ns->is_zmap)
+			slba = nvme_zns_slba2po2(
+				nvme_sect_to_lba(ns, bio->bi_iter.bi_sector), ns, 0);
+		else
+			slba = nvme_sect_to_lba(ns, bio->bi_iter.bi_sector);
+#else
+		u64 slba = nvme_sect_to_lba(ns, bio->bi_iter.bi_sector);
+#endif
 
 		if (n < segments) {
 			range[n].cattr = cpu_to_le32(0);
@@ -1048,11 +1144,22 @@ static inline blk_status_t nvme_setup_write_zeroes(struct nvme_ns *ns,
 
 	cmnd->write_zeroes.opcode = nvme_cmd_write_zeroes;
 	cmnd->write_zeroes.nsid = cpu_to_le32(ns->head->ns_id);
-	cmnd->write_zeroes.slba =
-		cpu_to_le64(nvme_sect_to_lba(ns, blk_rq_pos(req)));
 	cmnd->write_zeroes.length =
 		cpu_to_le16((blk_rq_bytes(req) >> ns->lba_shift) - 1);
 	cmnd->write_zeroes.control = 0;
+
+
+#ifdef CONFIG_BLK_DEV_ZONED
+	if (ns->is_zmap)
+		cmnd->rw.slba = cpu_to_le64(nvme_zns_slba2po2(
+				nvme_sect_to_lba(ns, blk_rq_pos(req)), ns, 0));
+	else
+		cmnd->write_zeroes.slba =
+			cpu_to_le64(nvme_sect_to_lba(ns, blk_rq_pos(req)));
+#else
+	cmnd->write_zeroes.slba =
+		cpu_to_le64(nvme_sect_to_lba(ns, blk_rq_pos(req)));
+#endif
 	return BLK_STS_OK;
 }
 
@@ -1075,11 +1182,18 @@ static inline blk_status_t nvme_setup_rw(struct nvme_ns *ns,
 				(rq_is_zone_append(req) ?
 				nvme_cmd_zns_append : nvme_cmd_write) :
 				nvme_cmd_read);
+
+	if (ns->is_zmap)
+		cmnd->rw.slba = cpu_to_le64(nvme_zns_slba2po2(
+				nvme_sect_to_lba(ns, blk_rq_pos(req)), ns, 0));
+	else
+		cmnd->rw.slba = cpu_to_le64(nvme_sect_to_lba(ns, blk_rq_pos(req)));
+
 #else
 	cmnd->rw.opcode = (rq_data_dir(req) ? nvme_cmd_write : nvme_cmd_read);
+	cmnd->rw.slba = cpu_to_le64(nvme_sect_to_lba(ns, blk_rq_pos(req)));
 #endif
 	cmnd->rw.nsid = cpu_to_le32(ns->head->ns_id);
-	cmnd->rw.slba = cpu_to_le64(nvme_sect_to_lba(ns, blk_rq_pos(req)));
 	cmnd->rw.length = cpu_to_le16((blk_rq_bytes(req) >> ns->lba_shift) - 1);
 
 	if (req_op(req) == REQ_OP_WRITE && ctrl->nr_streams)
@@ -1122,8 +1236,18 @@ static inline blk_status_t nvme_setup_zmgmt_send(struct nvme_ns *ns,
 {
 	cmnd->zmgmt_send.opcode = nvme_cmd_zns_mgmt_send;
 	cmnd->zmgmt_send.nsid = cpu_to_le32(ns->head->ns_id);
+
+#ifdef CONFIG_BLK_DEV_ZONED
+	if (ns->is_zmap)
+		cmnd->zmgmt_send.slba = cpu_to_le64(nvme_zns_slba2po2(
+				blk_rq_pos(req) >> (ns->lba_shift - 9), ns, 0));
+	else
+		cmnd->zmgmt_send.slba =
+			cpu_to_le64(blk_rq_pos(req) >> (ns->lba_shift - 9));
+#else
 	cmnd->zmgmt_send.slba =
 			cpu_to_le64(blk_rq_pos(req) >> (ns->lba_shift - 9));
+#endif
 
 	if (bio_op(req->bio) & REQ_ZONE_ALL)
 		cmnd->zmgmt_send.zflags |= NVME_CMD_ZONE_MGMT_SEND_ALL;
@@ -2380,6 +2504,12 @@ static void nvme_update_disk_info(struct gendisk *disk,
 	if ((ns->ms && !nvme_ns_has_pi(ns) && !blk_get_integrity(disk)) ||
 	    ns->lba_shift > PAGE_SHIFT)
 		capacity = 0;
+
+#ifdef CONFIG_BLK_DEV_ZONED
+	/* Need to report a capacity that matches the po2 zone address space */
+	if (ns->is_zmap)
+		capacity = nvme_lba_to_sect(ns, nvme_zns_capacity(disk));
+#endif
 
 	set_capacity_revalidate_and_notify(disk, capacity, false);
 
