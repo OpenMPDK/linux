@@ -501,7 +501,8 @@ struct blk_revalidate_zone_args {
 	unsigned long   *zrwa_zones_bitmap;
 	unsigned long	*seq_zones_wlock;
 	unsigned int	nr_zones;
-	sector_t	zone_sectors;
+	sector_t	zone_sectors_sz;
+	sector_t	zone_sectors_cap;
 	sector_t	sector;
 };
 
@@ -521,22 +522,23 @@ static int blk_revalidate_zone_cb(struct blk_zone *zone, unsigned int idx,
 	 * smaller last zone.
 	 */
 	if (zone->start == 0) {
-		if (zone->len == 0 || !is_power_of_2(zone->len)) {
+		if (zone->len == 0 || !is_power_of_2(zone->size)) {
 			pr_warn("%s: Invalid zoned device with non power of two zone size (%llu)\n",
 				disk->disk_name, zone->len);
 			return -ENODEV;
 		}
 
-		args->zone_sectors = zone->len;
+		args->zone_sectors_sz = zone->size;
+		args->zone_sectors_cap = zone->len;
 		args->nr_zones = (capacity + zone->len - 1) >> ilog2(zone->len);
-	} else if (zone->start + args->zone_sectors < capacity) {
-		if (zone->len != args->zone_sectors) {
+	} else if (zone->start + args->zone_sectors_sz < capacity) {
+		if (zone->len != args->zone_sectors_cap) {
 			pr_warn("%s: Invalid zoned device with non constant zone size\n",
 				disk->disk_name);
 			return -ENODEV;
 		}
 	} else {
-		if (zone->len > args->zone_sectors) {
+		if (zone->len > args->zone_sectors_cap) {
 			pr_warn("%s: Invalid zoned device with larger last zone size\n",
 				disk->disk_name);
 			return -ENODEV;
@@ -619,7 +621,7 @@ int blk_revalidate_disk_zones(struct gendisk *disk)
 	 */
 	blk_mq_freeze_queue(q);
 	if (ret >= 0) {
-		blk_queue_chunk_sectors(q, args.zone_sectors);
+		blk_queue_chunk_sectors(q, args.zone_sectors_sz);
 		q->nr_zones = args.nr_zones;
 		swap(q->seq_zones_wlock, args.seq_zones_wlock);
 		swap(q->zrwa_zones_bitmap, args.zrwa_zones_bitmap);
