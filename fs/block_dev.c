@@ -2084,9 +2084,14 @@ static void blkdev_copy_endio(struct bio *bio)
 	int ret = blk_status_to_errno(bio->bi_status);
 	long res = 0;
 
-	/* For error-handling in partial copy-scenario */
-	if (ret)
-		res = bio->bi_iter.bi_sector;
+	/* For error-handling in partial copy-scenario
+	 * return number of bytes copied on success
+	 * on failure returns # of source ranges copied
+	 */
+	if (unlikely(ret))
+		res = bio->bi_copy_ranges;
+	else
+		ret = bio->bi_copy_ranges << SECTOR_SHIFT;
 
 	iocb->ki_complete(iocb, ret, res);
 

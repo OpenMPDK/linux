@@ -513,6 +513,9 @@ static inline void nvme_end_request(struct request *req, __le16 status,
 	rq->status = le16_to_cpu(status) >> 1;
 	rq->result = result;
 
+	if (op_is_copy(req_op(req)) && status != NVME_SC_SUCCESS)
+		req->copy_ranges = le64_to_cpu(result.u64 & 0xffff);
+
 	/* Set the returned sector for zone append commands */
 	nvme_update_req(req, rq->status, result);
 

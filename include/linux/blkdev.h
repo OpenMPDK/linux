@@ -226,6 +226,8 @@ struct request {
 	unsigned short write_hint;
 	unsigned short ioprio;
 
+	unsigned short copy_ranges;
+
 	unsigned int extra_len;	/* length of alignment and padding */
 
 	enum mq_rq_state state;

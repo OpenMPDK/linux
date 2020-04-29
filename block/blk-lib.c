@@ -125,7 +125,7 @@ int __blkdev_issue_copy(struct block_device *bdev, sector_t dest,
 	struct range_entry *payload;
 	unsigned int op;
 	sector_t bs_mask;
-	sector_t src_sects, len = 0, copy_len = 0, cdest;
+	sector_t src_sects, len = 0, copy_len = 0, cdest, total_len = 0;
 	int i, ret, total_size, max_copy_len, max_nr_srcs, copied_srcs;
 
 	if (!q)
@@ -185,6 +185,7 @@ int __blkdev_issue_copy(struct block_device *bdev, sector_t dest,
 				break;
 
 			copy_len += len;
+			total_len += len;
 
 			WARN_ON_ONCE((src_sects << 9) > UINT_MAX);
 
@@ -193,7 +194,10 @@ int __blkdev_issue_copy(struct block_device *bdev, sector_t dest,
 			cdest += len;
 		}
 
+		/* storing # of source ranges */
 		payload[0].len = i - 1;
+		/* storing copy len so far */
+		bio->bi_copy_ranges = total_len;
 
 		total_size = (max_nr_srcs + 1) * sizeof(*rlist);
 		ret = bio_add_page(bio, virt_to_page(payload), total_size,
