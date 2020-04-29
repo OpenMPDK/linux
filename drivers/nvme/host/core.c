@@ -239,6 +239,10 @@ static int nvme_zns_update(struct nvme_ns *ns)
 
 	/* keep the buffer under device-specific limits */
 	max_hw_bytes = queue_max_hw_sectors(ns->queue) << 9;
+
+	/* Hardcode to 32KB for now */
+	max_hw_bytes = 1 << 15;
+
 	max_sz = min_not_zero(max_sz, max_hw_bytes);
 	buf_sz = max_sz;
 
