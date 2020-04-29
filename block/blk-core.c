@@ -234,8 +234,11 @@ static void print_req_error(struct request *req, blk_status_t status,
 static void req_bio_endio(struct request *rq, struct bio *bio,
 			  unsigned int nbytes, blk_status_t error)
 {
-	if (error)
+	if (error) {
 		bio->bi_status = error;
+		if (req_op(rq) == REQ_OP_COPY)
+			bio->bi_copy_ranges = rq->copy_ranges;
+	}
 
 	if (unlikely(rq->rq_flags & RQF_QUIET))
 		bio_set_flag(bio, BIO_QUIET);
