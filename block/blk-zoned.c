@@ -522,7 +522,7 @@ static int blk_revalidate_zone_cb(struct blk_zone *zone, unsigned int idx,
 	 * smaller last zone.
 	 */
 	if (zone->start == 0) {
-		if (zone->len == 0 || !is_power_of_2(zone->size)) {
+		if (zone->len == 0) {
 			pr_warn("%s: Invalid zoned device with non power of two zone size (%llu)\n",
 				disk->disk_name, zone->len);
 			return -ENODEV;
