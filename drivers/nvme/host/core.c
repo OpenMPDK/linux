@@ -320,7 +320,9 @@ static int __nvme_zns_zone_report(struct nvme_ns *ns, sector_t sector,
 	if (ret)
 		return ret;
 
-	zno = sector >> ilog2(nvme_lba_to_sect(ns, ns->zone_sz_lb));
+	zno = sector;
+	do_div(zno, ns->zone_sz_lb  << (ns->lba_shift - 9));
+
 	if (zno < ns->nr_zones) {
 		nrz = min_t(unsigned int, nr_zones, ns->nr_zones - zno);
 
