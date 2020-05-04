@@ -230,7 +230,7 @@ static int nvme_zns_update(struct nvme_ns *ns)
 	struct nvme_ctrl *ctrl = ns->ctrl;
 	void *buf;
 	sector_t slba = 0;
-	u64 min_sz, buf_sz, max_sz, zone_off = 0, max_hw_bytes;
+	u64 min_sz, buf_sz, max_sz, zone_off = 0, max_hw_bytes, max_seg_bytes;
 	int ret;
 
 	min_sz = sizeof(struct nvme_zone_report) +
@@ -240,7 +240,11 @@ static int nvme_zns_update(struct nvme_ns *ns)
 
 	/* keep the buffer under device-specific limits */
 	max_hw_bytes = queue_max_hw_sectors(ns->queue) << 9;
+	max_seg_bytes = queue_max_segments(ns->queue) * ctrl->page_size;
+
 	max_sz = min_not_zero(max_sz, max_hw_bytes);
+	max_sz = min_not_zero(max_sz, max_seg_bytes);
+
 	buf_sz = max_sz;
 
 	/* try to deal with potential allocation failure */
