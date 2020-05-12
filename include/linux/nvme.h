@@ -223,7 +223,12 @@ struct nvme_zns_lba_fe {
 	__u8			rsvd9[7];
 };
 
-struct nvme_id_zns {
+struct nvme_id_ctrl_zns {
+	uint8_t zamds;
+	uint8_t rsvd[4095];
+};
+
+struct nvme_id_ns_zns {
 	__le16			zoc;
 	__le16			ozcs;
 	__u8			rsvd4[12];
@@ -304,8 +309,7 @@ struct nvme_id_ctrl {
 	__u8			nvscc;
 	__u8			nwpc;
 	__le16			acwu;
-	__u8			zamds;
-	__u8			rsvd535;
+	__u8			rsvd535[2];
 	__le32			sgls;
 	__le32			mnan;
 	__u8			rsvd544[224];
