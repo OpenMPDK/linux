@@ -868,6 +868,13 @@ static const struct io_op_def io_op_defs[] = {
 		.hash_reg_file		= 1,
 		.unbound_nonreg_file	= 1,
 	},
+	[IORING_OP_COPY] = {
+		.async_ctx              = 1,
+		.needs_mm               = 1,
+		.needs_file             = 1,
+		.unbound_nonreg_file    = 1,
+		.pollout                = 1,
+	},
 };
 
 static void io_wq_submit_work(struct io_wq_work **workptr);
@@ -2408,7 +2415,8 @@ static ssize_t io_import_iovec(int rw, struct io_kiocb *req,
 	if (req->rw.kiocb.private && !(req->flags & REQ_F_BUFFER_SELECT))
 		return -EINVAL;
 
-	if (opcode == IORING_OP_READ || opcode == IORING_OP_WRITE) {
+	if (opcode == IORING_OP_READ || opcode == IORING_OP_WRITE ||
+			opcode == IORING_OP_COPY) {
 		if (req->flags & REQ_F_BUFFER_SELECT) {
 			buf = io_rw_buffer_select(req, &sqe_len, needs_lock);
 			if (IS_ERR(buf)) {
@@ -2743,10 +2751,15 @@ static int io_write(struct io_kiocb *req, bool force_nonblock)
 		if (!force_nonblock)
 			current->signal->rlim[RLIMIT_FSIZE].rlim_cur = req->fsize;
 
-		if (req->file->f_op->write_iter)
-			ret2 = call_write_iter(req->file, kiocb, &iter);
-		else
-			ret2 = loop_rw_iter(WRITE, req->file, kiocb, &iter);
+		if (unlikely(req->opcode == IORING_OP_COPY))
+			ret2 =  blkdev_copy_iter(kiocb, &iter);
+		else {
+			if (req->file->f_op->write_iter)
+				ret2 = call_write_iter(req->file, kiocb, &iter);
+			else
+				ret2 = loop_rw_iter(WRITE, req->file, kiocb,
+						&iter);
+		}
 
 		if (!force_nonblock)
 			current->signal->rlim[RLIMIT_FSIZE].rlim_cur = RLIM_INFINITY;
@@ -4966,6 +4979,7 @@ static int io_req_defer_prep(struct io_kiocb *req,
 	case IORING_OP_WRITEV:
 	case IORING_OP_WRITE_FIXED:
 	case IORING_OP_WRITE:
+	case IORING_OP_COPY:
 #ifdef CONFIG_BLK_DEV_ZONED
 	/* fallthrough */
 	case IORING_OP_ZONE_APPEND:
@@ -5100,6 +5114,7 @@ static void io_cleanup_req(struct io_kiocb *req)
 	case IORING_OP_WRITEV:
 	case IORING_OP_WRITE_FIXED:
 	case IORING_OP_WRITE:
+	case IORING_OP_COPY:
 #ifdef CONFIG_BLK_DEV_ZONED
 	/* fallthrough */
 	case IORING_OP_ZONE_APPEND:
@@ -5162,6 +5177,7 @@ static int io_issue_sqe(struct io_kiocb *req, const struct io_uring_sqe *sqe,
 	case IORING_OP_WRITEV:
 	case IORING_OP_WRITE_FIXED:
 	case IORING_OP_WRITE:
+	case IORING_OP_COPY:
 		if (sqe) {
 			ret = io_write_prep(req, sqe, force_nonblock);
 			if (ret < 0)
