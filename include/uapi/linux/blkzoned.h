@@ -105,6 +105,7 @@ struct blk_zone {
 	__u8	resv63[24];
 };
 
+
 /**
  * struct blk_zone_report - BLKREPORTZONE ioctl request/reply
  *
@@ -146,6 +147,8 @@ struct blk_zone_dev {
 	__u32	rwanvms;
 	__u32	zrwacg;
 	__u32	zrwas;
+	__u32	nr_zones;
+	__u32	rsv40[4];
 };
 
 /**

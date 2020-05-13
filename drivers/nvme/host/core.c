@@ -343,12 +343,14 @@ static int nvme_zns_zone_report(struct gendisk *disk, sector_t sector,
 				void *data)
 {
 	struct nvme_ns *ns = disk->private_data;
+
 	return __nvme_zns_zone_report(ns, sector, nr_zones, cb, data);
 }
 
 static int __nvme_zns_report_prop(struct nvme_ns *ns,
 				  struct blk_zone_dev *zprop)
 {
+	zprop->nr_zones = ns->nr_zones;
 	zprop->mar = ns->mar;
 	zprop->mor = ns->mor;
 	zprop->rrl = ns->rrl;

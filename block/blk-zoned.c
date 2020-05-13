@@ -149,6 +149,14 @@ unsigned int blkdev_nr_zones(struct gendisk *disk)
 
 	if (!blk_queue_is_zoned(disk->queue))
 		return 0;
+
+	if (disk->fops->report_zone_prop) {
+		struct blk_zone_dev zprop;
+
+		disk->fops->report_zone_prop(disk, &zprop);
+		return zprop.nr_zones;
+	}
+
 	return (get_capacity(disk) + zone_sectors - 1) >> ilog2(zone_sectors);
 }
 EXPORT_SYMBOL_GPL(blkdev_nr_zones);
@@ -641,8 +649,18 @@ int blk_revalidate_disk_zones(struct gendisk *disk)
 	 * GFP_NOIO was specified.
 	 */
 	noio_flag = memalloc_noio_save();
+
 	ret = disk->fops->report_zones(disk, 0, UINT_MAX,
 				       blk_revalidate_zone_cb, &args);
+
+	/* Get nr_zones from devices that support report_zone_prop */
+	if (disk->fops->report_zone_prop) {
+		struct blk_zone_dev zprop;
+
+		disk->fops->report_zone_prop(disk, &zprop);
+		args.nr_zones = zprop.nr_zones;
+	}
+
 	memalloc_noio_restore(noio_flag);
 
 	/*
