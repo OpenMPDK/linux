@@ -284,6 +284,8 @@ struct nvme_ctrl {
 #endif
 
 #ifdef CONFIG_BLK_DEV_ZONED
+	struct work_struct async_zone_change_work;
+	u32 aen_nsid;
 	u8 zrwacap;
 	u32 mrwz;
 	u32 rwanvms;

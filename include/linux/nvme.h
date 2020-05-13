@@ -587,6 +587,7 @@ enum {
 	NVME_AEN_BIT_NS_ATTR		= 8,
 	NVME_AEN_BIT_FW_ACT		= 9,
 	NVME_AEN_BIT_ANA_CHANGE		= 11,
+	NVME_AEN_BIT_ZONE_DESC_CHANGE	= 27,
 	NVME_AEN_BIT_DISC_CHANGE	= 31,
 };
 
@@ -594,6 +595,7 @@ enum {
 	NVME_AEN_CFG_NS_ATTR		= 1 << NVME_AEN_BIT_NS_ATTR,
 	NVME_AEN_CFG_FW_ACT		= 1 << NVME_AEN_BIT_FW_ACT,
 	NVME_AEN_CFG_ANA_CHANGE		= 1 << NVME_AEN_BIT_ANA_CHANGE,
+	NVME_AEN_CFG_ZONE_DESC_CHANGE	= 1 << NVME_AEN_BIT_ZONE_DESC_CHANGE,
 	NVME_AEN_CFG_DISC_CHANGE	= 1 << NVME_AEN_BIT_DISC_CHANGE,
 };
 
@@ -1670,7 +1672,10 @@ struct nvme_completion {
 	 */
 	union nvme_result {
 		__le16	u16;
-		__le32	u32;
+		struct {
+			__le32	u32;
+			__le32	nsid;
+		};
 		__le64	u64;
 	} result;
 	__le16	sq_head;	/* how much of this queue may be reclaimed */

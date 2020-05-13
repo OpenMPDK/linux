@@ -420,6 +420,39 @@ static int nvme_zns_init(struct nvme_ns *ns, struct nvme_id_ns *id,
 	return 0;
 }
 
+static void nvme_clear_zone_changed_list_log(struct nvme_ctrl *ctrl)
+{
+	struct nvme_zone_changed_list *log;
+	u32 nsid = ctrl->aen_nsid;
+	int i, error;
+
+	log = kzalloc(sizeof(struct nvme_zone_changed_list), GFP_KERNEL);
+	if (!log)
+		return;
+
+	/* Read the log to clear the AEN */
+	error = nvme_get_log(ctrl, nsid, NVME_LOG_CHANGED_ZONE_L, 0, log,
+			sizeof(*log), 0);
+	if (error)
+		dev_warn(ctrl->device,
+			"reading zone changed log failed: %d\n", error);
+	else
+		for (i = 0; i < log->numids; i++)
+			dev_warn(ctrl->device,
+				"Zone descriptor changed, zslba %lld\n",
+				log->ids[i]);
+
+	kfree(log);
+}
+
+static void nvme_zone_change_work(struct work_struct *work)
+{
+	struct nvme_ctrl *ctrl =
+		container_of(work, struct nvme_ctrl, async_zone_change_work);
+
+	nvme_clear_zone_changed_list_log(ctrl);
+}
+
 static void nvme_zns_exit(struct nvme_ns *ns)
 {
 	kvfree(ns->zones);
@@ -1688,9 +1721,16 @@ int nvme_set_queue_count(struct nvme_ctrl *ctrl, int *count)
 }
 EXPORT_SYMBOL_GPL(nvme_set_queue_count);
 
-#define NVME_AEN_SUPPORTED \
-	(NVME_AEN_CFG_NS_ATTR | NVME_AEN_CFG_FW_ACT | \
-	 NVME_AEN_CFG_ANA_CHANGE | NVME_AEN_CFG_DISC_CHANGE)
+#ifdef CONFIG_BLK_DEV_ZONED
+	#define NVME_AEN_SUPPORTED \
+		(NVME_AEN_CFG_NS_ATTR | NVME_AEN_CFG_FW_ACT | \
+		NVME_AEN_CFG_ANA_CHANGE | NVME_AEN_CFG_DISC_CHANGE | \
+		NVME_AEN_CFG_ZONE_DESC_CHANGE)
+#else
+	#define NVME_AEN_SUPPORTED \
+		(NVME_AEN_CFG_NS_ATTR | NVME_AEN_CFG_FW_ACT | \
+		NVME_AEN_CFG_ANA_CHANGE | NVME_AEN_CFG_DISC_CHANGE)
+#endif
 
 static void nvme_enable_aen(struct nvme_ctrl *ctrl)
 {
@@ -4703,8 +4743,10 @@ static void nvme_fw_act_work(struct work_struct *work)
 	nvme_get_fw_slot_info(ctrl);
 }
 
-static void nvme_handle_aen_notice(struct nvme_ctrl *ctrl, u32 result)
+static void nvme_handle_aen_notice(struct nvme_ctrl *ctrl,
+		volatile union nvme_result *res)
 {
+	u32 result = le32_to_cpu(res->u32);
 	u32 aer_notice_type = (result & 0xff00) >> 8;
 
 	trace_nvme_async_event(ctrl, aer_notice_type);
@@ -4730,6 +4772,13 @@ static void nvme_handle_aen_notice(struct nvme_ctrl *ctrl, u32 result)
 		queue_work(nvme_wq, &ctrl->ana_work);
 		break;
 #endif
+#ifdef CONFIG_BLK_DEV_ZONED
+	case NVME_AER_NOTICE_ZONE_DESC_CHANGED:
+		ctrl->aen_result = res->u32;
+		ctrl->aen_nsid = res->nsid;
+		queue_work(nvme_wq, &ctrl->async_zone_change_work);
+		break;
+#endif
 	case NVME_AER_NOTICE_DISC_CHANGED:
 		ctrl->aen_result = result;
 		break;
@@ -4749,7 +4798,7 @@ void nvme_complete_async_event(struct nvme_ctrl *ctrl, __le16 status,
 
 	switch (aer_type) {
 	case NVME_AER_NOTICE:
-		nvme_handle_aen_notice(ctrl, result);
+		nvme_handle_aen_notice(ctrl, res);
 		break;
 	case NVME_AER_ERROR:
 	case NVME_AER_SMART:
@@ -4770,6 +4819,7 @@ void nvme_stop_ctrl(struct nvme_ctrl *ctrl)
 	nvme_mpath_stop(ctrl);
 	nvme_stop_keep_alive(ctrl);
 	flush_work(&ctrl->async_event_work);
+	flush_work(&ctrl->async_zone_change_work);
 	cancel_work_sync(&ctrl->fw_act_work);
 }
 EXPORT_SYMBOL_GPL(nvme_stop_ctrl);
@@ -4848,6 +4898,10 @@ int nvme_init_ctrl(struct nvme_ctrl *ctrl, struct device *dev,
 	INIT_WORK(&ctrl->fw_act_work, nvme_fw_act_work);
 	INIT_WORK(&ctrl->delete_work, nvme_delete_ctrl_work);
 	init_waitqueue_head(&ctrl->state_wq);
+
+	#ifdef CONFIG_BLK_DEV_ZONED
+	INIT_WORK(&ctrl->async_zone_change_work, nvme_zone_change_work);
+	#endif
 
 	INIT_DELAYED_WORK(&ctrl->ka_work, nvme_keep_alive_work);
 	memset(&ctrl->ka_cmd, 0, sizeof(ctrl->ka_cmd));
