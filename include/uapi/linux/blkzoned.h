@@ -144,7 +144,6 @@ struct blk_zone_dev {
 	__u8	rsv17[2];
 	__u8	zrwacap;
 	__u32	mrwz;
-	__u32	rwanvms;
 	__u32	zrwacg;
 	__u32	zrwas;
 	__u32	nr_zones;
