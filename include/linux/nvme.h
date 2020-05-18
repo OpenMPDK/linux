@@ -235,9 +235,7 @@ struct nvme_id_ctrl_zns {
 	__u8			zrwacap;
 	__u8			rsvd2[2];
 	__le32			mrwz;
-	__le32			rwanvms;
-	__le32			zrwacg;
-	__u8			rsvd16[4080];
+	__u8			rsvd8[4088];
 };
 
 struct nvme_id_ns_zns {
@@ -250,7 +248,9 @@ struct nvme_id_ns_zns {
 	__le32			rrl;
 	__le32			frl;
 	__le32			zrwas;
-	__u8			rsvd44[3540];
+	__le32			zrwacg;
+	__le32			micws;
+	__u8			rsvd52[3532];
 	struct nvme_zns_lba_fe	lbafe[16];
 	__u8			vs[256];
 };

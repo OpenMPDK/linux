@@ -389,10 +389,9 @@ static int __nvme_zns_report_prop(struct nvme_ns *ns,
 	zprop->frl = ns->frl;
 	zprop->zoc = ns->zoc;
 	zprop->zrwas = ns->zrwas;
+	zprop->zrwacg = ns->zrwacg << (ns->lba_shift - 9);
 	zprop->zrwacap = ns->ctrl->zrwacap;
 	zprop->mrwz = ns->ctrl->mrwz;
-	zprop->rwanvms = ns->ctrl->rwanvms;
-	zprop->zrwacg = (ns->ctrl->zrwacg << (ns->lba_shift - 9));
 
 	return 0;
 }
@@ -466,6 +465,8 @@ static int nvme_zns_init(struct nvme_ns *ns, struct nvme_id_ns *id,
 	ns->frl = le32_to_cpu(zns_id->frl);
 	ns->zoc = le16_to_cpu(zns_id->zoc);
 	ns->zrwas = le32_to_cpu(zns_id->zrwas) << (ns->lba_shift - 9);
+	ns->zrwacg = le32_to_cpu(zns_id->zrwacg) + 1;
+
 
 	ns->zones = kvzalloc(ns->nr_zones * sizeof(struct blk_zone),
 								GFP_KERNEL);
@@ -3768,10 +3769,6 @@ int nvme_init_identify(struct nvme_ctrl *ctrl)
 #ifdef CONFIG_BLK_DEV_ZONED
 				ctrl->zrwacap = id_zns->zrwacap;
 				ctrl->mrwz = le32_to_cpu(id_zns->mrwz);
-				ctrl->zrwacg =
-					(le32_to_cpu(id_zns->zrwacg)) + 1;
-				ctrl->rwanvms =
-					le32_to_cpu(id_zns->rwanvms) >> 9;
 #endif
 
 				kfree(id_zns);

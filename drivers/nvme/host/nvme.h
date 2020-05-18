@@ -288,8 +288,6 @@ struct nvme_ctrl {
 	u32 aen_nsid;
 	u8 zrwacap;
 	u32 mrwz;
-	u32 rwanvms;
-	u32 zrwacg;
 #endif
 
 	/* Power saving configuration */
@@ -434,6 +432,7 @@ struct nvme_ns {
 	u32 frl;
 	u16 zoc;
 	u32 zrwas;
+	u32 zrwacg;
 #endif
 };
 
