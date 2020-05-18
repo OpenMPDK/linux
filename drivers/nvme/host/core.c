@@ -259,6 +259,7 @@ static int nvme_zns_update(struct nvme_ns *ns)
 	struct nvme_ctrl *ctrl = ns->ctrl;
 	void *buf;
 	sector_t slba = 0;
+	u64 off = 0;
 	u64 min_sz, buf_sz, max_sz, zone_off = 0, max_hw_bytes, max_seg_bytes;
 	int ret;
 
@@ -295,7 +296,6 @@ static int nvme_zns_update(struct nvme_ns *ns)
 	while (zone_off < ns->nr_zones) {
 		struct nvme_zone_report *zone_report;
 		struct nvme_zone_desc *zd;
-		u64 off = 0;
 		int i;
 
 		ret = nvme_zone_mgmt_rcv(ns,
@@ -330,7 +330,7 @@ static int nvme_zns_update(struct nvme_ns *ns)
 			off += ns->zone_sz_cap_diff;
 		}
 
-		slba += zone_report->nr_zones * ns->zone_sz_lb;
+		slba += zone_report->nr_zones * ns->zone_cap_lb;
 		zone_off += zone_report->nr_zones;
 	}
 
