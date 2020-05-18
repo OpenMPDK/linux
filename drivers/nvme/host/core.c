@@ -437,9 +437,6 @@ static int nvme_zns_size_init(struct nvme_ns *ns, struct nvme_id_ns *id,
 
 	ns->is_zmap = true;
 
-	/* Remove 1 zone to account for unallocated space */
-	ns->nr_zones--;
-
 out:
 	ns->zone_sz_lb = zsze_po2;
 	ns->zone_cap_lb = zsze;
@@ -1195,6 +1192,12 @@ static inline blk_status_t nvme_setup_rw(struct nvme_ns *ns,
 #endif
 	cmnd->rw.nsid = cpu_to_le32(ns->head->ns_id);
 	cmnd->rw.length = cpu_to_le16((blk_rq_bytes(req) >> ns->lba_shift) - 1);
+
+	if (ns->zones && cmnd->rw.slba + cmnd->rw.length >=
+					ns->zone_cap_lb * ns->nr_zones) {
+		BUG_ON(cmnd->rw.opcode == nvme_cmd_write);
+		cmnd->rw.slba = 0;
+	}
 
 	if (req_op(req) == REQ_OP_WRITE && ctrl->nr_streams)
 		nvme_assign_write_stream(ctrl, req, &control, &dsmgmt);
