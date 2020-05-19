@@ -414,10 +414,8 @@ static void nvme_config_zoned(struct gendisk *disk, struct nvme_ns *ns)
 	queue->nr_zones = ns->nr_zones;
 }
 
-static sector_t nvme_zns_capacity(struct gendisk *disk)
+static sector_t nvme_zns_capacity(struct nvme_ns *ns)
 {
-	struct nvme_ns *ns = disk->private_data;
-
 	return ns->zone_sz_lb * ns->nr_zones;
 }
 
@@ -2511,7 +2509,7 @@ static void nvme_update_disk_info(struct gendisk *disk,
 #ifdef CONFIG_BLK_DEV_ZONED
 	/* Need to report a capacity that matches the po2 zone address space */
 	if (ns->is_zmap)
-		capacity = nvme_lba_to_sect(ns, nvme_zns_capacity(disk));
+		capacity = nvme_lba_to_sect(ns, nvme_zns_capacity(ns));
 #endif
 
 	set_capacity_revalidate_and_notify(disk, capacity, false);
