@@ -286,7 +286,8 @@ int blkdev_zone_mgmt(struct block_device *bdev, enum req_opf op,
 			break;
 		}
 
-		bio->bi_opf = op | REQ_SYNC;
+		/* Avoid merge attempt for zone-mgmt requests*/
+		bio->bi_opf = op | REQ_SYNC | REQ_NOMERGE;
 		bio->bi_iter.bi_sector = sector;
 		sector += zone_sectors;
 
