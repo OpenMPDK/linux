@@ -241,17 +241,16 @@ struct nvme_id_ctrl_zns {
 struct nvme_id_ns_zns {
 	__le16			zoc;
 	__le16			ozcs;
-	__u8			rsvd4[12];
 	__le32			mar;
 	__le32			mor;
-	__u8			rsvd24[8];
 	__le32			rrl;
 	__le32			frl;
+	__u8			rsvd20[20];
 	__le32			zrwas;
 	__le32			zrwacg;
-	__le32			micws;
-	__u8			rsvd52[3532];
+	__u8			rsvd48[2768];
 	struct nvme_zns_lba_fe	lbafe[16];
+	__u8			rsvd3072[768];
 	__u8			vs[256];
 };
 
