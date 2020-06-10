@@ -857,16 +857,24 @@ static const struct io_op_def io_op_defs[] = {
 	[IORING_OP_PROVIDE_BUFFERS] = {},
 	[IORING_OP_REMOVE_BUFFERS] = {},
 	[IORING_OP_ZONE_APPEND] = {
+		.needs_mm		= 1,
+		.needs_file		= 1,
+		.unbound_nonreg_file	= 1,
+		.pollout		= 1,
+	},
+	[IORING_OP_ZONE_APPENDV] = {
 		.async_ctx		= 1,
 		.needs_mm		= 1,
 		.needs_file		= 1,
 		.hash_reg_file		= 1,
 		.unbound_nonreg_file	= 1,
+		.pollout		= 1,
 	},
 	[IORING_OP_ZONE_APPEND_FIXED] = {
 		.needs_file		= 1,
 		.hash_reg_file		= 1,
 		.unbound_nonreg_file	= 1,
+		.pollout		= 1,
 	},
 	[IORING_OP_COPY] = {
 		.async_ctx              = 1,
@@ -1267,8 +1275,9 @@ static void __io_cqring_fill_event(struct io_kiocb *req, long res, long cflags)
 		WRITE_ONCE(cqe->user_data, req->user_data);
 		WRITE_ONCE(cqe->res, res);
 #ifdef CONFIG_BLK_DEV_ZONED
-		if (req->opcode == IORING_OP_ZONE_APPEND || req->opcode ==
-				IORING_OP_ZONE_APPEND_FIXED)
+		if (req->opcode == IORING_OP_ZONE_APPEND ||
+				req->opcode == IORING_OP_ZONE_APPENDV ||
+				req->opcode == IORING_OP_ZONE_APPEND_FIXED)
 			WRITE_ONCE(cqe->offset, req->append_offset);
 		else
 			WRITE_ONCE(cqe->flags, cflags);
@@ -2415,8 +2424,8 @@ static ssize_t io_import_iovec(int rw, struct io_kiocb *req,
 	if (req->rw.kiocb.private && !(req->flags & REQ_F_BUFFER_SELECT))
 		return -EINVAL;
 
-	if (opcode == IORING_OP_READ || opcode == IORING_OP_WRITE ||
-			opcode == IORING_OP_COPY) {
+	if (opcode == IORING_OP_READ || opcode == IORING_OP_WRITE || opcode ==
+			IORING_OP_ZONE_APPEND || opcode == IORING_OP_COPY) {
 		if (req->flags & REQ_F_BUFFER_SELECT) {
 			buf = io_rw_buffer_select(req, &sqe_len, needs_lock);
 			if (IS_ERR(buf)) {
@@ -2741,8 +2750,9 @@ static int io_write(struct io_kiocb *req, bool force_nonblock)
 						SB_FREEZE_WRITE);
 		}
 #ifdef CONFIG_BLK_DEV_ZONED
-		if (req->opcode == IORING_OP_ZONE_APPEND || req->opcode ==
-				IORING_OP_ZONE_APPEND_FIXED)
+		if (req->opcode == IORING_OP_ZONE_APPEND ||
+				req->opcode == IORING_OP_ZONE_APPENDV ||
+				req->opcode == IORING_OP_ZONE_APPEND_FIXED)
 			kiocb->ki_flags |= IOCB_ZONE_APPEND;
 #endif
 
@@ -4984,6 +4994,7 @@ static int io_req_defer_prep(struct io_kiocb *req,
 	/* fallthrough */
 	case IORING_OP_ZONE_APPEND:
 	/* fallthrough */
+	case IORING_OP_ZONE_APPENDV:
 	case IORING_OP_ZONE_APPEND_FIXED:
 #endif
 		ret = io_write_prep(req, sqe, true);
@@ -5119,6 +5130,7 @@ static void io_cleanup_req(struct io_kiocb *req)
 	/* fallthrough */
 	case IORING_OP_ZONE_APPEND:
 	/* fallthrough */
+	case IORING_OP_ZONE_APPENDV:
 	case IORING_OP_ZONE_APPEND_FIXED:
 #endif
 		if (io->rw.iov != io->rw.fast_iov)
@@ -5172,6 +5184,7 @@ static int io_issue_sqe(struct io_kiocb *req, const struct io_uring_sqe *sqe,
 		break;
 #ifdef CONFIG_BLK_DEV_ZONED
 	case IORING_OP_ZONE_APPEND:
+	case IORING_OP_ZONE_APPENDV:
 	case IORING_OP_ZONE_APPEND_FIXED:
 #endif
 	case IORING_OP_WRITEV:
