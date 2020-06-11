@@ -83,11 +83,13 @@ struct f2fs_super_block {
 	__le32 log_sectors_per_block;	/* log2 # of sectors per block */
 	__le32 log_blocksize;		/* log2 block size in bytes */
 	__le32 log_blocks_per_seg;	/* log2 # of blocks per segment */
+	__le32 wsegs_per_sec;		/* # of writable segments per section */
 	__le32 segs_per_sec;		/* # of segments per section */
 	__le32 secs_per_zone;		/* # of sections per zone */
 	__le32 checksum_offset;		/* checksum offset inside super block */
 	__le64 block_count;		/* total # of user blocks */
 	__le32 section_count;		/* total # of sections */
+	__le32 wsegment_count;		/* total # of writable segments */
 	__le32 segment_count;		/* total # of segments */
 	__le32 segment_count_ckpt;	/* # of segments for checkpoint */
 	__le32 segment_count_sit;	/* # of segments for SIT */
@@ -118,7 +120,7 @@ struct f2fs_super_block {
 	__u8 hot_ext_count;		/* # of hot file extension */
 	__le16  s_encoding;		/* Filename charset encoding */
 	__le16  s_encoding_flags;	/* Filename charset encoding flags */
-	__u8 reserved[306];		/* valid reserved region */
+	__u8 reserved[298];		/* valid reserved region */
 	__le32 crc;			/* checksum of superblock */
 } __packed;
 
