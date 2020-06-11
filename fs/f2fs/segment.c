@@ -166,6 +166,24 @@ found:
 	return result - size + __reverse_ffz(tmp);
 }
 
+static bool is_hole_seg(struct f2fs_sb_info *sbi, unsigned int segno)
+{
+	unsigned int start_blkno, devi, start_segno;
+
+	if (!f2fs_is_multi_device(sbi))
+		return false;
+
+	start_blkno = START_BLOCK(sbi, segno);
+	devi = f2fs_target_device_index(sbi, start_blkno);
+	if (bdev_is_zoned(FDEV(devi).bdev)) {
+		start_segno = GET_SEC_FROM_SEG(sbi, segno) * sbi->segs_per_sec;
+		if ((segno - start_segno) >= sbi->wsegs_per_sec)
+			return true;
+	}
+
+	return false;
+}
+
 bool f2fs_need_SSR(struct f2fs_sb_info *sbi)
 {
 	int node_secs = get_blocktype_secs(sbi, F2FS_DIRTY_NODES);
@@ -2369,6 +2387,9 @@ static int is_next_segment_free(struct f2fs_sb_info *sbi, int type)
 	unsigned int segno = curseg->segno + 1;
 	struct free_segmap_info *free_i = FREE_I(sbi);
 
+	if (is_hole_seg(sbi, segno))
+		return 0;
+
 	if (segno < MAIN_SEGS(sbi) && segno % sbi->segs_per_sec)
 		return !test_bit(segno, free_i->free_segmap);
 	return 0;
@@ -4278,6 +4299,10 @@ static void init_free_segmap(struct f2fs_sb_info *sbi)
 
 	for (start = 0; start < MAIN_SEGS(sbi); start++) {
 		struct seg_entry *sentry = get_seg_entry(sbi, start);
+
+		if (is_hole_seg(sbi, start))
+			continue;
+
 		if (!sentry->valid_blocks)
 			__set_free(sbi, start);
 		else
@@ -4429,7 +4454,7 @@ static int check_zone_write_pointer(struct f2fs_sb_info *sbi,
 	 * Get last valid block of the zone.
 	 */
 	last_valid_block = zone_block - 1;
-	for (s = sbi->segs_per_sec - 1; s >= 0; s--) {
+	for (s = sbi->wsegs_per_sec - 1; s >= 0; s--) {
 		segno = zone_segno + s;
 		se = get_seg_entry(sbi, segno);
 		for (b = sbi->blocks_per_seg - 1; b >= 0; b--)
@@ -4689,6 +4714,7 @@ static void init_min_max_mtime(struct f2fs_sb_info *sbi)
 {
 	struct sit_info *sit_i = SIT_I(sbi);
 	unsigned int segno;
+	unsigned int wsegs_per_sec = 0;
 
 	down_write(&sit_i->sentry_lock);
 
@@ -4698,10 +4724,11 @@ static void init_min_max_mtime(struct f2fs_sb_info *sbi)
 		unsigned int i;
 		unsigned long long mtime = 0;
 
-		for (i = 0; i < sbi->segs_per_sec; i++)
+		wsegs_per_sec = get_wsegs_per_sec(sbi, segno);
+		for (i = 0; i < wsegs_per_sec; i++)
 			mtime += get_seg_entry(sbi, segno + i)->mtime;
 
-		mtime = div_u64(mtime, sbi->segs_per_sec);
+		mtime = div_u64(mtime, wsegs_per_sec);
 
 		if (sit_i->min_mtime > mtime)
 			sit_i->min_mtime = mtime;

@@ -339,6 +339,19 @@ static inline unsigned int get_ckpt_valid_blocks(struct f2fs_sb_info *sbi,
 	return get_seg_entry(sbi, segno)->ckpt_valid_blocks;
 }
 
+static inline unsigned int get_wsegs_per_sec(struct f2fs_sb_info *sbi,
+		unsigned int segno)
+{
+	unsigned int start_blkno, devi;
+
+	start_blkno = START_BLOCK(sbi, segno);
+	devi = f2fs_target_device_index(sbi, start_blkno);
+	if (f2fs_is_multi_device(sbi) && bdev_is_zoned(FDEV(devi).bdev))
+		return sbi->wsegs_per_sec;
+	else
+		return sbi->segs_per_sec;
+}
+
 static inline void seg_info_from_raw_sit(struct seg_entry *se,
 					struct f2fs_sit_entry *rs)
 {
@@ -407,14 +420,15 @@ static inline void __set_free(struct f2fs_sb_info *sbi, unsigned int segno)
 	unsigned int secno = GET_SEC_FROM_SEG(sbi, segno);
 	unsigned int start_segno = GET_SEG_FROM_SEC(sbi, secno);
 	unsigned int next;
+	unsigned int wsegs_per_sec = get_wsegs_per_sec(sbi, segno);
 
 	spin_lock(&free_i->segmap_lock);
 	clear_bit(segno, free_i->free_segmap);
 	free_i->free_segments++;
 
 	next = find_next_bit(free_i->free_segmap,
-			start_segno + sbi->segs_per_sec, start_segno);
-	if (next >= start_segno + sbi->segs_per_sec) {
+			start_segno + wsegs_per_sec, start_segno);
+	if (next >= start_segno + wsegs_per_sec) {
 		clear_bit(secno, free_i->free_secmap);
 		free_i->free_sections++;
 	}
@@ -440,6 +454,7 @@ static inline void __set_test_and_free(struct f2fs_sb_info *sbi,
 	unsigned int secno = GET_SEC_FROM_SEG(sbi, segno);
 	unsigned int start_segno = GET_SEG_FROM_SEC(sbi, secno);
 	unsigned int next;
+	unsigned int wsegs_per_sec = get_wsegs_per_sec(sbi, segno);
 
 	spin_lock(&free_i->segmap_lock);
 	if (test_and_clear_bit(segno, free_i->free_segmap)) {
@@ -448,8 +463,8 @@ static inline void __set_test_and_free(struct f2fs_sb_info *sbi,
 		if (IS_CURSEC(sbi, secno))
 			goto skip_free;
 		next = find_next_bit(free_i->free_segmap,
-				start_segno + sbi->segs_per_sec, start_segno);
-		if (next >= start_segno + sbi->segs_per_sec) {
+				start_segno + wsegs_per_sec, start_segno);
+		if (next >= start_segno + wsegs_per_sec) {
 			if (test_and_clear_bit(secno, free_i->free_secmap))
 				free_i->free_sections++;
 		}
