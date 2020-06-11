@@ -3012,6 +3012,7 @@ static void init_sb_info(struct f2fs_sb_info *sbi)
 	sbi->blocksize = 1 << sbi->log_blocksize;
 	sbi->log_blocks_per_seg = le32_to_cpu(raw_super->log_blocks_per_seg);
 	sbi->blocks_per_seg = 1 << sbi->log_blocks_per_seg;
+	sbi->wsegs_per_sec = le32_to_cpu(raw_super->wsegs_per_sec);
 	sbi->segs_per_sec = le32_to_cpu(raw_super->segs_per_sec);
 	sbi->secs_per_zone = le32_to_cpu(raw_super->secs_per_zone);
 	sbi->total_sections = le32_to_cpu(raw_super->section_count);

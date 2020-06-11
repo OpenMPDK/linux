@@ -257,13 +257,14 @@ static unsigned int get_cb_cost(struct f2fs_sb_info *sbi, unsigned int segno)
 	unsigned char age = 0;
 	unsigned char u;
 	unsigned int i;
+	unsigned int wsegs_per_sec = get_wsegs_per_sec(sbi, segno);
 
-	for (i = 0; i < sbi->segs_per_sec; i++)
+	for (i = 0; i < wsegs_per_sec; i++)
 		mtime += get_seg_entry(sbi, start + i)->mtime;
 	vblocks = get_valid_blocks(sbi, segno, true);
 
-	mtime = div_u64(mtime, sbi->segs_per_sec);
-	vblocks = div_u64(vblocks, sbi->segs_per_sec);
+	mtime = div_u64(mtime, wsegs_per_sec);
+	vblocks = div_u64(vblocks, wsegs_per_sec);
 
 	u = (vblocks * 100) >> sbi->log_blocks_per_seg;
 
@@ -1035,8 +1036,8 @@ next_step:
 		 * race condition along with SSR block allocation.
 		 */
 		if ((gc_type == BG_GC && has_not_enough_free_secs(sbi, 0, 0)) ||
-				get_valid_blocks(sbi, segno, true) ==
-							BLKS_PER_SEC(sbi))
+			get_valid_blocks(sbi, segno, true) ==
+			(sbi->blocks_per_seg * get_wsegs_per_sec(sbi, segno)))
 			return submitted;
 
 		if (check_valid_map(sbi, segno, off) == 0)
@@ -1177,14 +1178,15 @@ static int do_garbage_collect(struct f2fs_sb_info *sbi,
 	struct f2fs_summary_block *sum;
 	struct blk_plug plug;
 	unsigned int segno = start_segno;
-	unsigned int end_segno = start_segno + sbi->segs_per_sec;
+	unsigned int wsegs_per_sec = get_wsegs_per_sec(sbi, segno);
+	unsigned int end_segno = start_segno + wsegs_per_sec;
 	int seg_freed = 0, migrated = 0;
 	unsigned char type = IS_DATASEG(get_seg_entry(sbi, segno)->type) ?
 						SUM_TYPE_DATA : SUM_TYPE_NODE;
 	int submitted = 0;
 
 	if (__is_large_section(sbi))
-		end_segno = rounddown(end_segno, sbi->segs_per_sec);
+		end_segno = rounddown(end_segno, wsegs_per_sec);
 
 	/* readahead multi ssa blocks those have contiguous address */
 	if (__is_large_section(sbi))
@@ -1289,6 +1291,7 @@ int f2fs_gc(struct f2fs_sb_info *sbi, bool sync,
 	unsigned long long last_skipped = sbi->skipped_atomic_files[FG_GC];
 	unsigned long long first_skipped;
 	unsigned int skipped_round = 0, round = 0;
+	unsigned int wsegs_per_sec = get_wsegs_per_sec(sbi, segno);
 
 	trace_f2fs_gc_begin(sbi->sb, sync, background,
 				get_pages(sbi, F2FS_DIRTY_NODES),
@@ -1339,7 +1342,7 @@ gc_more:
 	}
 
 	seg_freed = do_garbage_collect(sbi, segno, &gc_list, gc_type);
-	if (gc_type == FG_GC && seg_freed == sbi->segs_per_sec)
+	if (gc_type == FG_GC && seg_freed == wsegs_per_sec)
 		sec_freed++;
 	total_freed += seg_freed;
 
