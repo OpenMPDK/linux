@@ -2293,6 +2293,7 @@ static const struct block_device_operations nvme_fops = {
 	.getgeo		= nvme_getgeo,
 	.revalidate_disk= nvme_revalidate_disk,
 	.report_zones	= nvme_report_zones,
+	.report_zone_p	= nvme_report_zone_prop,
 	.pr_ops		= &nvme_pr_ops,
 };
 
@@ -2320,6 +2321,7 @@ const struct block_device_operations nvme_ns_head_ops = {
 	.compat_ioctl	= nvme_compat_ioctl,
 	.getgeo		= nvme_getgeo,
 	.report_zones	= nvme_report_zones,
+	.report_zone_p	= nvme_report_zone_prop,
 	.pr_ops		= &nvme_pr_ops,
 };
 #endif /* CONFIG_NVME_MULTIPATH */

@@ -443,6 +443,14 @@ struct nvme_ns {
 	u8 pi_type;
 #ifdef CONFIG_BLK_DEV_ZONED
 	u64 zsze;
+
+	u32 nr_zones;
+	u32 mar;
+	u32 mor;
+	u32 rrl;
+	u32 frl;
+	u16 zoc;
+	u16 ozcs;
 #endif
 	unsigned long features;
 	unsigned long flags;
@@ -756,11 +764,14 @@ int nvme_update_zone_info(struct gendisk *disk, struct nvme_ns *ns,
 int nvme_report_zones(struct gendisk *disk, sector_t sector,
 		      unsigned int nr_zones, report_zones_cb cb, void *data);
 
+int nvme_report_zone_prop(struct gendisk *disk, struct blk_zone_dev *zprop);
+
 blk_status_t nvme_setup_zone_mgmt_send(struct nvme_ns *ns, struct request *req,
 				       struct nvme_command *cmnd,
 				       enum nvme_zone_mgmt_action action);
 #else
 #define nvme_report_zones NULL
+#define nvme_report_zone_prop NULL
 
 static inline blk_status_t nvme_setup_zone_mgmt_send(struct nvme_ns *ns,
 		struct request *req, struct nvme_command *cmnd,

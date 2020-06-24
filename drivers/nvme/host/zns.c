@@ -35,6 +35,28 @@ static int nvme_set_max_append(struct nvme_ctrl *ctrl)
 	return 0;
 }
 
+static u64 nvme_zns_nr_zones(struct nvme_ns *ns)
+{
+	struct nvme_command c = { };
+	struct nvme_zone_report report;
+	int buflen = sizeof(struct nvme_zone_report);
+	int ret;
+
+	c.zmr.opcode = nvme_cmd_zone_mgmt_recv;
+	c.zmr.nsid = cpu_to_le32(ns->head->ns_id);
+	c.zmr.slba = cpu_to_le64(0);
+	c.zmr.numd = cpu_to_le32(nvme_bytes_to_numd(buflen));
+	c.zmr.zra = NVME_ZRA_ZONE_REPORT;
+	c.zmr.zrasf = NVME_ZRASF_ZONE_REPORT_ALL;
+	c.zmr.pr = 0;
+
+	ret = nvme_submit_sync_cmd(ns->queue, &c, &report, buflen);
+	if (ret)
+		return ret;
+
+	return le64_to_cpu(report.nr_zones);
+}
+
 int nvme_update_zone_info(struct gendisk *disk, struct nvme_ns *ns,
 			  unsigned lbaf)
 {
@@ -93,6 +115,13 @@ int nvme_update_zone_info(struct gendisk *disk, struct nvme_ns *ns,
 		status = -EINVAL;
 		goto free_data;
 	}
+
+	ns->nr_zones = nvme_zns_nr_zones(ns);
+	ns->mar = le32_to_cpu(id->mar);
+	ns->mor = le32_to_cpu(id->mor);
+	ns->rrl = le32_to_cpu(id->rrl);
+	ns->frl = le32_to_cpu(id->frl);
+	ns->zoc = le16_to_cpu(id->zoc);
 
 	q->limits.zoned = BLK_ZONED_HM;
 	blk_queue_flag_set(QUEUE_FLAG_ZONE_RESETALL, q);
@@ -234,6 +263,38 @@ int nvme_report_zones(struct gendisk *disk, sector_t sector,
 
 	if (ns->head->ids.csi == NVME_CSI_ZNS)
 		ret = nvme_ns_report_zones(ns, sector, nr_zones, cb, data);
+	else
+		ret = -EINVAL;
+	nvme_put_ns_from_disk(head, srcu_idx);
+
+	return ret;
+}
+
+static int nvme_ns_report_zone_prop(struct nvme_ns *ns, struct blk_zone_dev *zprop)
+{
+	zprop->nr_zones = ns->nr_zones;
+	zprop->zoc = ns->zoc;
+	zprop->ozcs = ns->ozcs;
+	zprop->mar = ns->mar;
+	zprop->mor = ns->mor;
+	zprop->rrl = ns->rrl;
+	zprop->frl = ns->frl;
+
+	return 0;
+}
+
+int nvme_report_zone_prop(struct gendisk *disk, struct blk_zone_dev *zprop)
+{
+	struct nvme_ns_head *head = NULL;
+	struct nvme_ns *ns;
+	int srcu_idx, ret;
+
+	ns = nvme_get_ns_from_disk(disk, &head, &srcu_idx);
+	if (unlikely(!ns))
+		return -EWOULDBLOCK;
+
+	if (ns->head->ids.csi == NVME_CSI_ZNS)
+		ret = nvme_ns_report_zone_prop(ns, zprop);
 	else
 		ret = -EINVAL;
 	nvme_put_ns_from_disk(head, srcu_idx);
