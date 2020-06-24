@@ -108,7 +108,8 @@ struct blk_zone {
 	__u8	cond;		/* Zone condition */
 	__u8	non_seq;	/* Non-sequential write resources active */
 	__u8	reset;		/* Reset write pointer recommended */
-	__u8	resv[4];
+	__u8	attr;		/* Zone attributes */
+	__u8	resv[3];
 	__u64	capacity;	/* Zone capacity in number of sectors */
 	__u8	reserved[24];
 };
