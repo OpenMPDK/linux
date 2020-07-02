@@ -1046,7 +1046,7 @@ static int __bio_iov_append_get_pages(struct bio *bio, struct iov_iter *iter)
 	size_t offset;
 
 	if (WARN_ON_ONCE(!max_append_sectors))
-		return 0;
+		return -EINVAL;
 
 	/*
 	 * Move page array up in the allocated memory for the bio vecs as far as
