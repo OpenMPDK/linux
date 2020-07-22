@@ -243,7 +243,7 @@ struct target_core_file_cmd {
 	struct kiocb	iocb;
 };
 
-static void cmd_rw_aio_complete(struct kiocb *iocb, long ret, long ret2)
+static void cmd_rw_aio_complete(struct kiocb *iocb, long ret, long long ret2)
 {
 	struct target_core_file_cmd *cmd;
 
