@@ -241,7 +241,7 @@ static inline size_t iov_iter_count(const struct iov_iter *i)
  * greater than the amount of data in iov_iter is fine - it'll just do
  * nothing in that case.
  */
-static inline void iov_iter_truncate(struct iov_iter *i, u64 count)
+static inline bool iov_iter_truncate(struct iov_iter *i, u64 count)
 {
 	/*
 	 * count doesn't have to fit in size_t - comparison extends both
@@ -249,8 +249,11 @@ static inline void iov_iter_truncate(struct iov_iter *i, u64 count)
 	 * conversion in assignement is by definition greater than all
 	 * values of size_t, including old i->count.
 	 */
-	if (i->count > count)
+	if (i->count > count) {
 		i->count = count;
+		return true;
+	}
+	return false;
 }
 
 /*
