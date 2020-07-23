@@ -167,10 +167,19 @@ static struct inode *bdev_file_inode(struct file *file)
 	return file->f_mapping->host;
 }
 
-static unsigned int dio_bio_write_op(struct kiocb *iocb)
+static unsigned int dio_bio_op(bool is_read, struct kiocb *iocb)
 {
-	unsigned int op = REQ_OP_WRITE | REQ_SYNC | REQ_IDLE;
+	unsigned int op;
 
+	if (is_read)
+		return REQ_OP_READ;
+
+	if (iocb->ki_flags & IOCB_ZONE_APPEND)
+		op = REQ_OP_ZONE_APPEND;
+	else
+		op = REQ_OP_WRITE;
+
+	op |= REQ_SYNC | REQ_IDLE;
 	/* avoid the need for a I/O completion work item */
 	if (iocb->ki_flags & IOCB_DSYNC)
 		op |= REQ_FUA;
@@ -196,6 +205,7 @@ __blkdev_direct_IO_simple(struct kiocb *iocb, struct iov_iter *iter,
 	struct bio_vec inline_vecs[DIO_INLINE_BIO_VECS], *vecs;
 	loff_t pos = iocb->ki_pos;
 	bool should_dirty = false;
+	bool is_read = (iov_iter_rw(iter) == READ);
 	struct bio bio;
 	ssize_t ret;
 	blk_qc_t qc;
@@ -220,18 +230,17 @@ __blkdev_direct_IO_simple(struct kiocb *iocb, struct iov_iter *iter,
 	bio.bi_private = current;
 	bio.bi_end_io = blkdev_bio_end_io_simple;
 	bio.bi_ioprio = iocb->ki_ioprio;
+	bio.bi_opf = dio_bio_op(is_read, iocb);
 
 	ret = bio_iov_iter_get_pages(&bio, iter);
 	if (unlikely(ret))
 		goto out;
 	ret = bio.bi_iter.bi_size;
 
-	if (iov_iter_rw(iter) == READ) {
-		bio.bi_opf = REQ_OP_READ;
+	if (is_read) {
 		if (iter_is_iovec(iter))
 			should_dirty = true;
 	} else {
-		bio.bi_opf = dio_bio_write_op(iocb);
 		task_io_account_write(ret);
 	}
 	if (iocb->ki_flags & IOCB_HIPRI)
@@ -284,6 +293,14 @@ static int blkdev_iopoll(struct kiocb *kiocb, bool wait)
 	return blk_poll(q, READ_ONCE(kiocb->ki_cookie), wait);
 }
 
+static inline long long blkdev_bio_ret2(struct kiocb *iocb, struct bio *bio)
+{
+	/* return written-offset for zone append in bytes */
+	if (op_is_write(bio_op(bio)) && iocb->ki_flags & IOCB_ZONE_APPEND)
+		return bio->bi_iter.bi_sector << SECTOR_SHIFT;
+	return 0;
+}
+
 static void blkdev_bio_end_io(struct bio *bio)
 {
 	struct blkdev_dio *dio = bio->bi_private;
@@ -296,15 +313,17 @@ static void blkdev_bio_end_io(struct bio *bio)
 		if (!dio->is_sync) {
 			struct kiocb *iocb = dio->iocb;
 			ssize_t ret;
+			long long ret2;
 
 			if (likely(!dio->bio.bi_status)) {
 				ret = dio->size;
 				iocb->ki_pos += ret;
+				ret2 = blkdev_bio_ret2(iocb, bio);
 			} else {
 				ret = blk_status_to_errno(dio->bio.bi_status);
 			}
 
-			dio->iocb->ki_complete(iocb, ret, 0);
+			dio->iocb->ki_complete(iocb, ret, ret2);
 			if (dio->multi_bio)
 				bio_put(&dio->bio);
 		} else {
@@ -371,6 +390,7 @@ __blkdev_direct_IO(struct kiocb *iocb, struct iov_iter *iter, int nr_pages)
 		bio->bi_private = dio;
 		bio->bi_end_io = blkdev_bio_end_io;
 		bio->bi_ioprio = iocb->ki_ioprio;
+		bio->bi_opf = dio_bio_op(is_read, iocb);
 
 		ret = bio_iov_iter_get_pages(bio, iter);
 		if (unlikely(ret)) {
@@ -380,11 +400,9 @@ __blkdev_direct_IO(struct kiocb *iocb, struct iov_iter *iter, int nr_pages)
 		}
 
 		if (is_read) {
-			bio->bi_opf = REQ_OP_READ;
 			if (dio->should_dirty)
 				bio_set_pages_dirty(bio);
 		} else {
-			bio->bi_opf = dio_bio_write_op(iocb);
 			task_io_account_write(bio->bi_iter.bi_size);
 		}
 
@@ -408,6 +426,12 @@ __blkdev_direct_IO(struct kiocb *iocb, struct iov_iter *iter, int nr_pages)
 		}
 
 		if (!dio->multi_bio) {
+			/* zone-append cannot work with multi bio*/
+			if (!is_read && iocb->ki_flags & IOCB_ZONE_APPEND) {
+				bio->bi_status = BLK_STS_IOERR;
+				bio_endio(bio);
+				break;
+			}
 			/*
 			 * AIO needs an extra reference to ensure the dio
 			 * structure which is embedded into the first bio
@@ -1725,6 +1749,7 @@ EXPORT_SYMBOL(blkdev_get_by_dev);
 static int blkdev_open(struct inode * inode, struct file * filp)
 {
 	struct block_device *bdev;
+	int ret;
 
 	/*
 	 * Preserve backwards compatibility and allow large file access
@@ -1750,7 +1775,11 @@ static int blkdev_open(struct inode * inode, struct file * filp)
 	filp->f_mapping = bdev->bd_inode->i_mapping;
 	filp->f_wb_err = filemap_sample_wb_err(filp->f_mapping);
 
-	return blkdev_get(bdev, filp->f_mode, filp);
+	ret = blkdev_get(bdev, filp->f_mode, filp);
+	if (blk_queue_is_zoned(bdev->bd_disk->queue))
+		filp->f_mode |= FMODE_ZONE_APPEND;
+
+	return ret;
 }
 
 static void __blkdev_put(struct block_device *bdev, fmode_t mode, int for_part)
@@ -1901,7 +1930,9 @@ ssize_t blkdev_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	if ((iocb->ki_flags & (IOCB_NOWAIT | IOCB_DIRECT)) == IOCB_NOWAIT)
 		return -EOPNOTSUPP;
 
-	iov_iter_truncate(from, size - iocb->ki_pos);
+	if (iov_iter_truncate(from, size - iocb->ki_pos) &&
+			(iocb->ki_flags & IOCB_ZONE_APPEND))
+		return -ENOSPC;
 
 	blk_start_plug(&plug);
 	ret = __generic_file_write_iter(iocb, from);
