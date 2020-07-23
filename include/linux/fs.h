@@ -178,6 +178,9 @@ typedef int (dio_iodone_t)(struct kiocb *iocb, loff_t offset,
 /* File supports async buffered reads */
 #define FMODE_BUF_RASYNC	((__force fmode_t)0x40000000)
 
+/* File can support zone-append */
+#define FMODE_ZONE_APPEND	((__force fmode_t)0x80000000)
+
 /*
  * Flag for rw_copy_check_uvector and compat_rw_copy_check_uvector
  * that indicates that they should check the contents of the iovec are
@@ -321,6 +324,7 @@ enum rw_hint {
 /* iocb->ki_waitq is valid */
 #define IOCB_WAITQ		(1 << 8)
 #define IOCB_NOIO		(1 << 9)
+#define IOCB_ZONE_APPEND	(1 << 10)
 
 struct kiocb {
 	struct file		*ki_filp;
@@ -3271,8 +3275,11 @@ static inline bool vma_is_fsdax(struct vm_area_struct *vma)
 static inline int iocb_flags(struct file *file)
 {
 	int res = 0;
-	if (file->f_flags & O_APPEND)
+	if (file->f_flags & O_APPEND) {
 		res |= IOCB_APPEND;
+		if (file->f_mode & FMODE_ZONE_APPEND)
+			res |= IOCB_ZONE_APPEND;
+	}
 	if (file->f_flags & O_DIRECT)
 		res |= IOCB_DIRECT;
 	if ((file->f_flags & O_DSYNC) || IS_SYNC(file->f_mapping->host))
@@ -3301,10 +3308,12 @@ static inline int kiocb_set_rw_flags(struct kiocb *ki, rwf_t flags)
 	if (flags & RWF_DSYNC)
 		kiocb_flags |= IOCB_DSYNC;
 	if (flags & RWF_SYNC)
-		kiocb_flags |= (IOCB_DSYNC | IOCB_SYNC);
-	if (flags & RWF_APPEND)
+		ki->ki_flags |= (IOCB_DSYNC | IOCB_SYNC);
+	if (flags & RWF_APPEND) {
 		kiocb_flags |= IOCB_APPEND;
-
+		if (ki->ki_filp->f_mode & FMODE_ZONE_APPEND)
+			kiocb_flags |= IOCB_ZONE_APPEND;
+	}
 	ki->ki_flags |= kiocb_flags;
 	return 0;
 }
