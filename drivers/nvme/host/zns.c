@@ -48,7 +48,7 @@ static int nvme_set_max_append(struct nvme_ctrl *ctrl)
 
 int nvme_update_zone_info(struct nvme_ns *ns, unsigned lbaf)
 {
-	struct nvme_effects_log *log = ns->head->effects;
+	/* struct nvme_effects_log *log = ns->head->effects; */
 	struct request_queue *q = ns->queue;
 	struct nvme_command c = { };
 	struct nvme_id_ns_zns *id;
