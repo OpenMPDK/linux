@@ -645,7 +645,17 @@ static inline blk_status_t nvme_setup_copy(struct nvme_ns *ns,
 
 	cmnd->copy.opcode = nvme_cmd_copy;
 	cmnd->copy.nsid = cpu_to_le32(ns->head->ns_id);
+
+#ifdef CONFIG_BLK_DEV_ZONED
+	if (ns->is_zmap)
+		cmnd->copy.sdlba = cpu_to_le64(nvme_zns_slba2po2(
+				blk_rq_pos(req) >> (ns->lba_shift - 9), ns, 0));
+	else
+		cmnd->copy.sdlba = cpu_to_le64(blk_rq_pos(req) >>
+				(ns->lba_shift - 9));
+#else
 	cmnd->copy.sdlba = cpu_to_le64(blk_rq_pos(req) >> (ns->lba_shift - 9));
+#endif
 
 	range = kmalloc_array(segments, sizeof(*range),
 			GFP_ATOMIC | __GFP_NOWARN);
@@ -660,9 +670,15 @@ static inline blk_status_t nvme_setup_copy(struct nvme_ns *ns,
 		ssrl = payload[i].len;
 		ssrl = ssrl >> (ns->lba_shift - 9);
 
+#ifdef CONFIG_BLK_DEV_ZONED
+		if (ns->is_zmap)
+			range[nr_range].slba =
+				cpu_to_le64(nvme_zns_slba2po2(slba, ns, 0));
+		else
+			range[nr_range].slba = cpu_to_le64(slba);
+#else
 		range[nr_range].slba = cpu_to_le64(slba);
-		range[nr_range].nlb = cpu_to_le16(ssrl - 1);
-
+#endif
 		nr_range++;
 	}
 
@@ -712,8 +728,18 @@ static blk_status_t nvme_setup_discard(struct nvme_ns *ns, struct request *req,
 	}
 
 	__rq_for_each_bio(bio, req) {
-		u64 slba = nvme_sect_to_lba(ns, bio->bi_iter.bi_sector);
 		u32 nlb = bio->bi_iter.bi_size >> ns->lba_shift;
+#ifdef CONFIG_BLK_DEV_ZONED
+		u64 slba;
+
+		if (ns->is_zmap)
+			slba = nvme_zns_slba2po2(
+				nvme_sect_to_lba(ns, bio->bi_iter.bi_sector), ns, 0);
+		else
+			slba = nvme_sect_to_lba(ns, bio->bi_iter.bi_sector);
+#else
+		u64 slba = nvme_sect_to_lba(ns, bio->bi_iter.bi_sector);
+#endif
 
 		if (n < segments) {
 			range[n].cattr = cpu_to_le32(0);
@@ -752,11 +778,22 @@ static inline blk_status_t nvme_setup_write_zeroes(struct nvme_ns *ns,
 
 	cmnd->write_zeroes.opcode = nvme_cmd_write_zeroes;
 	cmnd->write_zeroes.nsid = cpu_to_le32(ns->head->ns_id);
-	cmnd->write_zeroes.slba =
-		cpu_to_le64(nvme_sect_to_lba(ns, blk_rq_pos(req)));
 	cmnd->write_zeroes.length =
 		cpu_to_le16((blk_rq_bytes(req) >> ns->lba_shift) - 1);
 	cmnd->write_zeroes.control = 0;
+
+#ifdef CONFIG_BLK_DEV_ZONED
+	if (ns->is_zmap)
+		cmnd->rw.slba = cpu_to_le64(nvme_zns_slba2po2(
+				nvme_sect_to_lba(ns, blk_rq_pos(req)), ns, 0));
+	else
+		cmnd->write_zeroes.slba =
+			cpu_to_le64(nvme_sect_to_lba(ns, blk_rq_pos(req)));
+#else
+	cmnd->write_zeroes.slba =
+		cpu_to_le64(nvme_sect_to_lba(ns, blk_rq_pos(req)));
+#endif
+
 	return BLK_STS_OK;
 }
 
@@ -776,10 +813,25 @@ static inline blk_status_t nvme_setup_rw(struct nvme_ns *ns,
 	if (req->cmd_flags & REQ_RAHEAD)
 		dsmgmt |= NVME_RW_DSM_FREQ_PREFETCH;
 
+#ifdef CONFIG_BLK_DEV_ZONED
+	if (ns->is_zmap)
+		cmnd->rw.slba = cpu_to_le64(nvme_zns_slba2po2(
+				nvme_sect_to_lba(ns, blk_rq_pos(req)), ns, 1));
+	else
+		cmnd->rw.slba = cpu_to_le64(nvme_sect_to_lba(ns, blk_rq_pos(req)));
+#else
+	cmnd->rw.slba = cpu_to_le64(nvme_sect_to_lba(ns, blk_rq_pos(req)));
+#endif
+
 	cmnd->rw.opcode = op;
 	cmnd->rw.nsid = cpu_to_le32(ns->head->ns_id);
-	cmnd->rw.slba = cpu_to_le64(nvme_sect_to_lba(ns, blk_rq_pos(req)));
 	cmnd->rw.length = cpu_to_le16((blk_rq_bytes(req) >> ns->lba_shift) - 1);
+
+	if (ns->nr_zones && cmnd->rw.slba + cmnd->rw.length >=
+					ns->zone_cap_lb * ns->nr_zones) {
+		BUG_ON(cmnd->rw.opcode == nvme_cmd_write);
+		cmnd->rw.slba = 0;
+	}
 
 	if (req_op(req) == REQ_OP_WRITE && ctrl->nr_streams)
 		nvme_assign_write_stream(ctrl, req, &control, &dsmgmt);
@@ -2071,6 +2123,12 @@ static void nvme_update_disk_info(struct gendisk *disk,
 	 */
 	if (ns->lba_shift > PAGE_SHIFT)
 		capacity = 0;
+
+#ifdef CONFIG_BLK_DEV_ZONED
+	/* Need to report a capacity that matches the po2 zone address space */
+	if (ns->is_zmap)
+		capacity = nvme_lba_to_sect(ns, nvme_zns_capacity(ns));
+#endif
 
 	/*
 	 * Register a metadata profile for PI, or the plain non-integrity NVMe

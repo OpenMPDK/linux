@@ -447,6 +447,11 @@ struct nvme_ns {
 	u8 pi_type;
 #ifdef CONFIG_BLK_DEV_ZONED
 	u64 zsze;
+	u64 zsze_po2;
+	u64 zsze_cap_diff;
+	u64 zone_sz_lb;
+	u64 zone_cap_lb;
+	bool is_zmap;
 
 	u32 nr_zones;
 	u32 mar;
@@ -509,6 +514,27 @@ static inline int nvme_reset_subsystem(struct nvme_ctrl *ctrl)
 	if (!ctrl->subsystem)
 		return -ENOTTY;
 	return ctrl->ops->reg_write32(ctrl, NVME_REG_NSSR, 0x4E564D65);
+}
+
+static inline sector_t nvme_zns_capacity(struct nvme_ns *ns)
+{
+	return ns->zone_sz_lb * ns->nr_zones;
+}
+
+static inline u64 nvme_zns_slba2po2(u64 lba, struct nvme_ns *ns, int print)
+{
+	u64 res, zid;
+
+	zid = lba;
+	do_div(zid, ns->zone_sz_lb);
+
+	res = lba - zid * ns->zsze_cap_diff;
+
+	if (print)
+		printk(KERN_CRIT "lba:%llu: out_lba:%llu (zid:%llu)\n",
+			lba, res, zid);
+
+	return res;
 }
 
 /*
