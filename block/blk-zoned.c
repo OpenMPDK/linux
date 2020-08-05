@@ -476,11 +476,11 @@ static int blk_revalidate_zone_cb(struct blk_zone *zone, unsigned int idx,
 	}
 
 	/* Check for holes in the zone report */
-	if (zone->start != args->sector) {
-		pr_warn("%s: Zone gap at sectors %llu..%llu\n",
-			disk->disk_name, args->sector, zone->start);
-		return -ENODEV;
-	}
+	/* if (zone->start != args->sector) { */
+		/* pr_warn("%s: Zone gap at sectors %llu..%llu\n", */
+			/* disk->disk_name, args->sector, zone->start); */
+		/* return -ENODEV; */
+	/* } */
 
 	/* Check zone type */
 	switch (zone->type) {
@@ -551,6 +551,7 @@ int blk_revalidate_disk_zones(struct gendisk *disk,
 	noio_flag = memalloc_noio_save();
 	ret = disk->fops->report_zones(disk, 0, UINT_MAX,
 				       blk_revalidate_zone_cb, &args);
+
 	memalloc_noio_restore(noio_flag);
 
 	/*
