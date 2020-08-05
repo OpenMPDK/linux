@@ -42,14 +42,14 @@ static int nvme_set_max_append(struct nvme_ctrl *ctrl)
 
 int nvme_update_zone_info(struct nvme_ns *ns, unsigned lbaf)
 {
-	struct nvme_effects_log *log = ns->head->effects;
+	/* struct nvme_effects_log *log = ns->head->effects; */
 	struct request_queue *q = ns->queue;
 	struct nvme_command c = { };
 	struct nvme_id_ns_zns *id;
 	int status;
 
 	/* Driver requires zone append support */
-	if ((le32_to_cpu(log->iocs[nvme_cmd_zone_append]) &
+	/* if ((le32_to_cpu(log->iocs[nvme_cmd_zone_append]) &
 			NVME_CMD_EFFECTS_CSUPP)) {
 		if (test_and_clear_bit(NVME_NS_FORCE_RO, &ns->flags))
 			dev_warn(ns->ctrl->device,
@@ -60,7 +60,7 @@ int nvme_update_zone_info(struct nvme_ns *ns, unsigned lbaf)
 		dev_warn(ns->ctrl->device,
 			 "Zone Append not supported for zoned namespace:%d. Forcing to read-only mode\n",
 			 ns->head->ns_id);
-	}
+	} */
 
 	/* Lazily query controller append limit for the first zoned namespace */
 	if (!ns->ctrl->max_zone_append) {
@@ -86,13 +86,13 @@ int nvme_update_zone_info(struct nvme_ns *ns, unsigned lbaf)
 	 * We currently do not handle devices requiring any of the zoned
 	 * operation characteristics.
 	 */
-	if (id->zoc) {
-		dev_warn(ns->ctrl->device,
-			"zone operations:%x not supported for namespace:%u\n",
-			le16_to_cpu(id->zoc), ns->head->ns_id);
-		status = -EINVAL;
-		goto free_data;
-	}
+	/* if (id->zoc) { */
+		/* dev_warn(ns->ctrl->device, */
+			/* "zone operations:%x not supported for namespace:%u\n", */
+			/* le16_to_cpu(id->zoc), ns->head->ns_id); */
+		/* status = -EINVAL; */
+		/* goto free_data; */
+	/* } */
 
 	ns->zsze = nvme_lba_to_sect(ns, le64_to_cpu(id->lbafe[lbaf].zsze));
 	if (!is_power_of_2(ns->zsze)) {
