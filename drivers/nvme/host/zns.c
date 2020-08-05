@@ -127,6 +127,7 @@ int nvme_update_zone_info(struct gendisk *disk, struct nvme_ns *ns,
 	blk_queue_flag_set(QUEUE_FLAG_ZONE_RESETALL, q);
 	blk_queue_max_open_zones(q, le32_to_cpu(id->mor) + 1);
 	blk_queue_max_active_zones(q, le32_to_cpu(id->mar) + 1);
+	blk_queue_required_elevator_features(ns->queue, ELEVATOR_F_ZBD_SEQ_WRITE);
 free_data:
 	kfree(id);
 	return status;
