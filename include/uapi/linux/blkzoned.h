@@ -144,15 +144,19 @@ struct blk_zone_range {
 };
 
 struct blk_zone_dev {
-	__u32	nr_zones;
 	__u32	mar;
 	__u32	mor;
 	__u32	rrl;
 	__u32	frl;
-	__u16	zoc;
-	__u16	ozcs;
-	__u32	rsv31[2];
-	__u64	rsv63[4];
+	__u8	zoc;
+	// __u16	ozcs;
+	__u8	rsv17[2];
+	__u8	zrwacap;
+	__u32	mrwz;
+	__u32	zrwacg;
+	__u32	zrwas;
+	__u32	nr_zones;
+	__u32	rsv40[4];
 };
 
 /**

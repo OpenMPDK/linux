@@ -276,7 +276,7 @@ static int nvme_ns_report_zone_prop(struct nvme_ns *ns, struct blk_zone_dev *zpr
 {
 	zprop->nr_zones = ns->nr_zones;
 	zprop->zoc = ns->zoc;
-	zprop->ozcs = ns->ozcs;
+	/* zprop->ozcs = ns->ozcs; */
 	zprop->mar = ns->mar;
 	zprop->mor = ns->mor;
 	zprop->rrl = ns->rrl;
