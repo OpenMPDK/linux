@@ -139,6 +139,7 @@ static const char *const blk_op_name[] = {
 	REQ_OP_NAME(ZONE_FINISH),
 	REQ_OP_NAME(ZONE_APPEND),
 	REQ_OP_NAME(ZONE_OFFLINE),
+	REQ_OP_NAME(ZONE_COMMIT),
 	REQ_OP_NAME(WRITE_SAME),
 	REQ_OP_NAME(WRITE_ZEROES),
 	REQ_OP_NAME(SCSI_IN),
@@ -1032,6 +1033,7 @@ static noinline_for_stack bool submit_bio_checks(struct bio *bio)
 	case REQ_OP_ZONE_CLOSE:
 	case REQ_OP_ZONE_FINISH:
 	case REQ_OP_ZONE_OFFLINE:
+	case REQ_OP_ZONE_COMMIT:
 		if (!blk_queue_is_zoned(q))
 			goto not_supported;
 		break;

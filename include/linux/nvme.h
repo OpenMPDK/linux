@@ -385,6 +385,13 @@ struct nvme_zns_lbafe {
 	__u8			rsvd9[7];
 };
 
+/* ZNS, ZRWA capability flags */
+enum nvme_zrwa_cap {
+	NVME_ZNS_ZRWASUP	= 1 << 0,
+	NVME_ZNS_EXPCOMSUP	= 1 << 1,
+	NVME_ZNS_IMPCOMSUP	= 1 << 2,
+};
+
 struct nvme_id_ns_zns {
 	__le16			zoc;
 	__le16			ozcs;
@@ -392,7 +399,10 @@ struct nvme_id_ns_zns {
 	__le32			mor;
 	__le32			rrl;
 	__le32			frl;
-	__u8			rsvd20[2796];
+	__u8			rsvd20[20];
+	__le32			zrwas;
+	__le32			zrwacg;
+	__u8			rsvd48[2768];
 	struct nvme_zns_lbafe	lbafe[16];
 	__u8			rsvd3072[768];
 	__u8			vs[256];
@@ -400,7 +410,10 @@ struct nvme_id_ns_zns {
 
 struct nvme_id_ctrl_zns {
 	__u8	zasl;
-	__u8	rsvd1[4095];
+	__u8	zrwacap;
+	__u8	rsvd2[2];
+	__le32	mrwz;
+	__u8	rsvd1[4088];
 };
 
 enum {
@@ -923,6 +936,7 @@ enum nvme_zone_mgmt_action {
 	NVME_ZONE_RESET		= 0x4,
 	NVME_ZONE_OFFLINE	= 0x5,
 	NVME_ZONE_SET_DESC_EXT	= 0x10,
+	NVME_ZONE_COMMIT	= 0x11,
 };
 
 struct nvme_zone_mgmt_send_cmd {
@@ -936,7 +950,7 @@ struct nvme_zone_mgmt_send_cmd {
 	__le64			slba;
 	__le32			cdw12;
 	__u8			zsa;
-	__u8			select_all;
+	__u8			attributes;
 	__u8			rsvd13[2];
 	__le32			cdw14[2];
 };
@@ -955,6 +969,12 @@ struct nvme_zone_mgmt_recv_cmd {
 	__u8			pr;
 	__u8			rsvd13;
 	__le32			cdw14[2];
+};
+
+/* Zone management send, Command Dword 13 attributes */
+enum {
+	NVME_CMD_ZMS_SELECT_ALL		= (1 << 0),
+	NVME_CMD_ZMS_ZRWAA		= (1 << 1),
 };
 
 enum {

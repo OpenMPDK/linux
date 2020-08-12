@@ -168,10 +168,12 @@ enum blk_zone_action {
 	BLK_ZONE_MGMT_OPEN	= 0x3,
 	BLK_ZONE_MGMT_RESET	= 0x4,
 	BLK_ZONE_MGMT_OFFLINE	= 0x5,
+	BLK_ZONE_MGMT_COMMIT	= 0x11,
 };
 
 enum blk_zone_mgmt_flags {
 	BLK_ZONE_SELECT_ALL	= 1 << 0,
+	BLK_ZONE_RWA		= 1 << 1,
 };
 
 /**
@@ -181,6 +183,7 @@ enum blk_zone_attr {
 	BLK_ZONE_ATTR_ZFC	= 1 << 0,
 	BLK_ZONE_ATTR_FZR	= 1 << 1,
 	BLK_ZONE_ATTR_RZR	= 1 << 2,
+	BLK_ZONE_ATTR_ZRWA	= 1 << 3,
 	BLK_ZONE_ATTR_ZDEV	= 1 << 7,
 };
 

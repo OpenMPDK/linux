@@ -235,12 +235,14 @@ int blkdev_zone_mgmt(struct block_device *bdev, enum req_opf op,
 		/* Out of range */
 		return -EINVAL;
 
-	/* Check alignment (handle eventual smaller last zone) */
-	if (sector & (zone_sectors - 1))
-		return -EINVAL;
+	if (op != REQ_OP_ZONE_COMMIT) {
+		/* Check alignment (handle eventual smaller last zone) */
+		if (sector & (zone_sectors - 1))
+			return -EINVAL;
 
-	if ((nr_sectors & (zone_sectors - 1)) && end_sector != capacity)
-		return -EINVAL;
+		if ((nr_sectors & (zone_sectors - 1)) && end_sector != capacity)
+			return -EINVAL;
+	}
 
 	while (sector < end_sector) {
 		bio = blk_next_bio(bio, 0, gfp_mask);
@@ -422,12 +424,17 @@ int blkdev_zone_mgmt_ioctl(struct block_device *bdev, fmode_t mode,
 		break;
 	case BLK_ZONE_MGMT_OPEN:
 		op = REQ_OP_ZONE_OPEN;
+		if (zmgmt.flags & BLK_ZONE_RWA)
+			op |= REQ_ZONE_ZRWA;
 		break;
 	case BLK_ZONE_MGMT_RESET:
 		op = REQ_OP_ZONE_RESET;
 		break;
 	case BLK_ZONE_MGMT_OFFLINE:
 		op = REQ_OP_ZONE_OFFLINE;
+		break;
+	case BLK_ZONE_MGMT_COMMIT:
+		op = REQ_OP_ZONE_COMMIT;
 		break;
 	default:
 		return -ENOTTY;

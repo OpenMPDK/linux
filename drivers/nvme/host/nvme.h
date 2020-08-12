@@ -274,6 +274,8 @@ struct nvme_ctrl {
 	u32 max_integrity_segments;
 #ifdef CONFIG_BLK_DEV_ZONED
 	u32 max_zone_append;
+	u8 zrwacap;
+	u32 mrwz;
 #endif
 	u16 crdt[3];
 	u16 oncs;
@@ -460,6 +462,8 @@ struct nvme_ns {
 	u32 frl;
 	u16 zoc;
 	u16 ozcs;
+	u32 zrwas;
+	u32 zrwacg;
 #endif
 	unsigned long features;
 	unsigned long flags;

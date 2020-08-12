@@ -915,6 +915,9 @@ blk_status_t nvme_setup_cmd(struct nvme_ns *ns, struct request *req,
 	case REQ_OP_ZONE_OFFLINE:
 		ret = nvme_setup_zone_mgmt_send(ns, req, cmd, NVME_ZONE_OFFLINE);
 		break;
+	case REQ_OP_ZONE_COMMIT:
+		ret = nvme_setup_zone_mgmt_send(ns, req, cmd, NVME_ZONE_COMMIT);
+		break;
 	case REQ_OP_WRITE_ZEROES:
 		ret = nvme_setup_write_zeroes(ns, req, cmd);
 		break;
