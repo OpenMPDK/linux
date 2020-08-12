@@ -42,6 +42,7 @@ static int nvme_set_max_append(struct nvme_ctrl *ctrl)
 		ctrl->max_zone_append = 1 << (id->zasl + 3);
 	else
 		ctrl->max_zone_append = ctrl->max_hw_sectors;
+
 	kfree(id);
 	return 0;
 }
@@ -113,6 +114,11 @@ int nvme_update_zone_info(struct nvme_ns *ns, unsigned lbaf)
 		status = -EINVAL;
 		goto free_data;
 	}
+	ns->ozcs = le16_to_cpu(id->ozcs);
+	ns->zrwas = le32_to_cpu(id->zrwas) << (ns->lba_shift - 9);
+	ns->zrwafg = (le32_to_cpu(id->zrwafg));
+	ns->zrwacap = le32_to_cpu(id->zrwacap);
+	ns->numzrwa = le32_to_cpu(id->numzrwa);
 
 	q->limits.zoned = BLK_ZONED_HM;
 	blk_queue_flag_set(QUEUE_FLAG_ZONE_RESETALL, q);
@@ -291,6 +297,22 @@ blk_status_t nvme_setup_zone_mgmt_send(struct nvme_ns *ns, struct request *req,
 	c->zms.nsid = cpu_to_le32(ns->head->ns_id);
 	c->zms.zsa = action;
 
+	if (req_op(req) == REQ_OP_ZONE_RESET_ALL)
+		c->zms.attributes |= NVME_CMD_ZMS_SELECT_ALL;
+	else if ((req->bio)->bi_opf & REQ_ZONE_ZRWA) {
+		if (ns->ozcs & NVME_ID_NS_ZNS_OZCS_ZRWASUP)
+			c->zms.attributes |= NVME_CMD_ZMS_ZRWAA;
+		else {
+			dev_warn(ns->ctrl->device, "ZRWA is not supported\n");
+			return BLK_STS_NOTSUPP;
+		}
+	} else if (req_op(req) ==  REQ_OP_ZONE_ZRWA_FLUSH &&
+			(!(ns->zrwacap & NVME_ZNS_ZRWA_EXPFLUSHSUP))) {
+		dev_warn(ns->ctrl->device,
+				"ZRWA explicit commit is not supported\n");
+		return BLK_STS_NOTSUPP;
+	}
+
 #ifdef CONFIG_BLK_DEV_ZONED
 	if (ns->is_zmap)
 		c->zms.slba = cpu_to_le64(nvme_zns_slba2po2(
@@ -300,9 +322,6 @@ blk_status_t nvme_setup_zone_mgmt_send(struct nvme_ns *ns, struct request *req,
 #else
 	c->zms.slba = cpu_to_le64(nvme_sect_to_lba(ns, blk_rq_pos(req)));
 #endif
-
-	if (req_op(req) == REQ_OP_ZONE_RESET_ALL)
-		c->zms.select_all = 1;
 
 	return BLK_STS_OK;
 }

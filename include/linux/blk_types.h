@@ -359,6 +359,8 @@ enum req_opf {
 	REQ_OP_ZONE_APPEND	= 13,
 	/* reset a zone write pointer */
 	REQ_OP_ZONE_RESET	= 15,
+	/* commit buffered data on zone */
+	REQ_OP_ZONE_ZRWA_FLUSH  = 16,
 	/* reset all the zone present on the device */
 	REQ_OP_ZONE_RESET_ALL	= 17,
 	/* copy ranges within device */
@@ -399,6 +401,7 @@ enum req_flag_bits {
 	 */
 	__REQ_CGROUP_PUNT,
 	__REQ_ZONE_ALL,		/* apply zone operation to all zones */
+	__REQ_ZONE_ZRWA,	/* use zone random write area */
 
 	/* command specific flags for REQ_OP_WRITE_ZEROES: */
 	__REQ_NOUNMAP,		/* do not free blocks when zeroing */
@@ -427,6 +430,7 @@ enum req_flag_bits {
 #define REQ_NOWAIT		(1ULL << __REQ_NOWAIT)
 #define REQ_CGROUP_PUNT		(1ULL << __REQ_CGROUP_PUNT)
 #define REQ_ZONE_ALL		(1ULL << __REQ_ZONE_ALL)
+#define REQ_ZONE_ZRWA		(1ULL << __REQ_ZONE_ZRWA)
 #define REQ_NOUNMAP		(1ULL << __REQ_NOUNMAP)
 #define REQ_HIPRI		(1ULL << __REQ_HIPRI)
 
@@ -508,6 +512,7 @@ static inline bool op_is_zone_mgmt(enum req_opf op)
 	case REQ_OP_ZONE_OPEN:
 	case REQ_OP_ZONE_CLOSE:
 	case REQ_OP_ZONE_FINISH:
+	case REQ_OP_ZONE_ZRWA_FLUSH:
 		return true;
 	default:
 		return false;

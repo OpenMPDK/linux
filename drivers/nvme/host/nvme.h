@@ -451,7 +451,12 @@ struct nvme_ns {
 	u64 zone_sz_lb;
 	u64 zone_cap_lb;
 	bool is_zmap;
+	u16 ozcs;
 	u32 nr_zones;
+	u32 zrwas;
+	u32 zrwafg;
+	u32 zrwacap;
+	u32 numzrwa;
 #endif
 	unsigned long features;
 	unsigned long flags;
