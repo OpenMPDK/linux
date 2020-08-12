@@ -220,17 +220,22 @@ int blkdev_zone_mgmt(struct block_device *bdev, enum req_opf op,
 	if (!op_is_zone_mgmt(op))
 		return -EOPNOTSUPP;
 
-	if (end_sector <= sector || end_sector > capacity)
-		/* Out of range */
-		return -EINVAL;
+	if (op != REQ_OP_ZONE_ZRWA_FLUSH) {
+		if (end_sector <= sector || end_sector > capacity)
+			/* Out of range */
+			return -EINVAL;
 
-	/* Check alignment (handle eventual smaller last zone) */
-	if (sector & (zone_sectors - 1))
-		return -EINVAL;
+		/* Check alignment (handle eventual smaller last zone) */
+		if (sector & (zone_sectors - 1))
+			return -EINVAL;
 
-	if ((nr_sectors & (zone_sectors - 1)) && end_sector != capacity)
-		return -EINVAL;
-
+		if ((nr_sectors & (zone_sectors - 1)) && end_sector != capacity)
+			return -EINVAL;
+	} else {
+		if (sector > capacity)
+			/* Out of range */
+			return -EINVAL;
+	}
 	while (sector < end_sector) {
 		bio = blk_next_bio(bio, 0, gfp_mask);
 		bio_set_dev(bio, bdev);
@@ -401,6 +406,11 @@ int blkdev_zone_mgmt_ioctl(struct block_device *bdev, fmode_t mode,
 	switch (zmgmt.action) {
 	case BLK_ZONE_MGMT_OPEN:
 		op = REQ_OP_ZONE_OPEN;
+		if (zmgmt.flags & BLK_ZONE_RWA)
+			op |= REQ_ZONE_ZRWA;
+		break;
+	case BLK_ZONE_MGMT_ZRWA_FLUSH:
+		op = REQ_OP_ZONE_ZRWA_FLUSH;
 		break;
 	default:
 		return -ENOTTY;

@@ -111,7 +111,8 @@ struct blk_zone {
 	__u8	cond;		/* Zone condition */
 	__u8	non_seq;	/* Non-sequential write resources active */
 	__u8	reset;		/* Reset write pointer recommended */
-	__u8	resv[4];
+	__u8	attr;		/* Zone attributes */
+	__u8	resv[3];
 	__u64	capacity;	/* Zone capacity in number of sectors */
 	__u8	reserved[24];
 };
@@ -150,10 +151,12 @@ struct blk_zone_range {
  */
 enum blk_zone_action {
 	BLK_ZONE_MGMT_OPEN		= 0x3,
+	BLK_ZONE_MGMT_ZRWA_FLUSH	= 0x11,
 };
 
 enum blk_zone_mgmt_flags {
 	BLK_ZONE_SELECT_ALL	= 1 << 0,
+	BLK_ZONE_RWA		= 1 << 1,
 };
 
 struct blk_zone_mgmt {
