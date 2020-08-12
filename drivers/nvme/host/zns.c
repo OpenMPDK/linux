@@ -42,6 +42,9 @@ static int nvme_set_max_append(struct nvme_ctrl *ctrl)
 		ctrl->max_zone_append = 1 << (id->zasl + 3);
 	else
 		ctrl->max_zone_append = ctrl->max_hw_sectors;
+	ctrl->zrwacap = id->zrwacap;
+	ctrl->mrwz = id->mrwz;
+
 	kfree(id);
 	return 0;
 }
@@ -118,6 +121,8 @@ int nvme_update_zone_info(struct nvme_ns *ns, unsigned lbaf)
 	ns->rrl = le32_to_cpu(id->rrl);
 	ns->frl = le32_to_cpu(id->frl);
 	ns->zoc = le16_to_cpu(id->zoc);
+	ns->zrwas = le32_to_cpu(id->zrwas) << (ns->lba_shift - 9);
+	ns->zrwacg = (le32_to_cpu(id->zrwacg)) + 1;
 
 	q->limits.zoned = BLK_ZONED_HM;
 	blk_queue_flag_set(QUEUE_FLAG_ZONE_RESETALL, q);
@@ -298,6 +303,10 @@ static int nvme_ns_report_zone_prop(struct nvme_ns *ns, struct blk_zone_dev *zpr
 	zprop->mor = ns->mor;
 	zprop->rrl = ns->rrl;
 	zprop->frl = ns->frl;
+	zprop->zrwas = ns->zrwas;
+	zprop->zrwacap = ns->ctrl->zrwacap;
+	zprop->mrwz = ns->ctrl->mrwz;
+	zprop->zrwacg = (ns->zrwacg << (ns->lba_shift - 9));
 
 	return 0;
 }
@@ -328,6 +337,22 @@ blk_status_t nvme_setup_zone_mgmt_send(struct nvme_ns *ns, struct request *req,
 	c->zms.nsid = cpu_to_le32(ns->head->ns_id);
 	c->zms.zsa = action;
 
+	if (req_op(req) == REQ_OP_ZONE_RESET_ALL)
+		c->zms.attributes |= NVME_CMD_ZMS_SELECT_ALL;
+	else if ((req->bio)->bi_opf & REQ_ZONE_ZRWA) {
+		if (ns->ctrl->zrwacap & NVME_ZNS_ZRWASUP)
+			c->zms.attributes |= NVME_CMD_ZMS_ZRWAA;
+		else {
+			dev_warn(ns->ctrl->device, "ZRWA is not supported\n");
+			return BLK_STS_NOTSUPP;
+		}
+	} else if (req_op(req) ==  REQ_OP_ZONE_COMMIT &&
+			(!(ns->ctrl->zrwacap & NVME_ZNS_EXPCOMSUP))) {
+		dev_warn(ns->ctrl->device,
+				"ZRWA explicit commit is not supported\n");
+		return BLK_STS_NOTSUPP;
+	}
+
 #ifdef CONFIG_BLK_DEV_ZONED
 	if (ns->is_zmap)
 		c->zms.slba = cpu_to_le64(nvme_zns_slba2po2(
@@ -337,9 +362,6 @@ blk_status_t nvme_setup_zone_mgmt_send(struct nvme_ns *ns, struct request *req,
 #else
 	c->zms.slba = cpu_to_le64(nvme_sect_to_lba(ns, blk_rq_pos(req)));
 #endif
-
-	if (req_op(req) == REQ_OP_ZONE_RESET_ALL)
-		c->zms.select_all = 1;
 
 	return BLK_STS_OK;
 }
