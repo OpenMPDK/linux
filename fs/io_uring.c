@@ -492,6 +492,7 @@ struct io_completion {
 	struct file			*file;
 	struct list_head		list;
 	int				cflags;
+	u64				append_res;
 };
 
 struct io_async_connect {
@@ -546,6 +547,7 @@ enum {
 	REQ_F_NO_FILE_TABLE_BIT,
 	REQ_F_WORK_INITIALIZED_BIT,
 	REQ_F_TASK_PINNED_BIT,
+	REQ_F_ZONE_APPEND_BIT,
 
 	/* not a real bit, just to check we're not overflowing the space */
 	__REQ_F_LAST_BIT,
@@ -595,6 +597,8 @@ enum {
 	REQ_F_WORK_INITIALIZED	= BIT(REQ_F_WORK_INITIALIZED_BIT),
 	/* req->task is refcounted */
 	REQ_F_TASK_PINNED	= BIT(REQ_F_TASK_PINNED_BIT),
+	/* return zone append offset */
+	REQ_F_ZONE_APPEND	= BIT(REQ_F_ZONE_APPEND_BIT),
 };
 
 struct async_poll {
@@ -645,6 +649,7 @@ struct io_kiocb {
 	refcount_t			refs;
 	struct task_struct		*task;
 	u64				user_data;
+	u64				addr2;
 
 	struct list_head		link_list;
 
@@ -656,6 +661,7 @@ struct io_kiocb {
 
 	struct percpu_ref		*fixed_file_refs;
 	struct callback_head		task_work;
+	struct callback_head		append_work;
 	/* for polled requests, i.e. IORING_OP_POLL_ADD and async armed poll */
 	struct hlist_node		hash_node;
 	struct async_poll		*apoll;
@@ -891,7 +897,7 @@ enum io_mem_account {
 	ACCT_PINNED,
 };
 
-static void __io_complete_rw(struct io_kiocb *req, long res, long res2,
+static void __io_complete_rw(struct io_kiocb *req, long res, long long res2,
 			     struct io_comp_state *cs);
 static void io_cqring_fill_event(struct io_kiocb *req, long res);
 static void io_put_req(struct io_kiocb *req);
@@ -921,6 +927,8 @@ static int io_setup_async_rw(struct io_kiocb *req, ssize_t io_size,
 static struct kmem_cache *req_cachep;
 
 static const struct file_operations io_uring_fops;
+
+static int setup_task_work(struct io_kiocb *req, task_work_func_t func);
 
 struct sock *io_uring_get_socket(struct file *file)
 {
@@ -2192,7 +2200,46 @@ static void kiocb_end_write(struct io_kiocb *req)
 	file_end_write(req->file);
 }
 
-static void io_complete_rw_common(struct kiocb *kiocb, long res,
+static void append_offset_copy_poll(struct callback_head *cb)
+{
+       struct io_kiocb *req = container_of(cb, struct io_kiocb, append_work);
+
+       if (put_user(req->compl.append_res, (u64 __user*)req->addr2)) {
+               req->result = -EFAULT;
+       }
+       refcount_dec(&req->refs);
+       smp_wmb();
+       WRITE_ONCE(req->iopoll_completed, 1);
+}
+
+static void append_offset_copy_func(struct callback_head *cb)
+{
+       struct io_kiocb *req = container_of(cb, struct io_kiocb, append_work);
+
+       if (put_user(req->compl.append_res, (u64 __user*)req->addr2)) {
+               req->result = -EFAULT;
+       }
+       io_cqring_add_event(req, req->result, req->compl.cflags);
+       io_put_req(req);
+}
+
+static int setup_task_work(struct io_kiocb *req, task_work_func_t func)
+{
+       int ret;
+       struct task_struct *tsk;
+       tsk = req->task;
+
+       refcount_inc(&req->refs);
+       init_task_work(&req->append_work, func);
+       ret = task_work_add(tsk, &req->append_work, true);
+       if (ret) {
+               put_task_struct(tsk);   //TODO
+       }
+       wake_up_process(tsk);
+       return 0;
+}
+
+static void io_complete_rw_common(struct kiocb *kiocb, long res, long long res2,
 				  struct io_comp_state *cs)
 {
 	struct io_kiocb *req = container_of(kiocb, struct io_kiocb, rw.kiocb);
@@ -2205,7 +2252,15 @@ static void io_complete_rw_common(struct kiocb *kiocb, long res,
 		req_set_fail_links(req);
 	if (req->flags & REQ_F_BUFFER_SELECTED)
 		cflags = io_put_rw_kbuf(req);
-	__io_req_complete(req, res, cflags, cs);
+	if (req->flags & REQ_F_ZONE_APPEND) {
+		req->result = res;
+		req->compl.cflags = cflags;
+		req->compl.append_res = res2;
+		setup_task_work(req, append_offset_copy_func);
+		io_put_req(req);
+	} else {
+		__io_req_complete(req, res, cflags, cs);
+	}
 }
 
 #ifdef CONFIG_BLOCK
@@ -2282,11 +2337,11 @@ static bool io_rw_reissue(struct io_kiocb *req, long res)
 	return false;
 }
 
-static void __io_complete_rw(struct io_kiocb *req, long res, long res2,
+static void __io_complete_rw(struct io_kiocb *req, long res, long long res2,
 			     struct io_comp_state *cs)
 {
 	if (!io_rw_reissue(req, res))
-		io_complete_rw_common(&req->rw.kiocb, res, cs);
+		io_complete_rw_common(&req->rw.kiocb, res, res2, cs);
 }
 
 static void io_complete_rw(struct kiocb *kiocb, long res, long long res2)
@@ -2307,9 +2362,14 @@ static void io_complete_rw_iopoll(struct kiocb *kiocb, long res, long long res2)
 		req_set_fail_links(req);
 
 	WRITE_ONCE(req->result, res);
-	/* order with io_poll_complete() checking ->result */
-	smp_wmb();
-	WRITE_ONCE(req->iopoll_completed, 1);
+	if (res != -EAGAIN && unlikely(req->flags & REQ_F_ZONE_APPEND)) {
+		WRITE_ONCE(req->compl.append_res, res2);
+		setup_task_work(req, append_offset_copy_poll);
+	} else {
+		/* order with io_poll_complete() checking ->result */
+		smp_wmb();
+		WRITE_ONCE(req->iopoll_completed, 1);
+	}
 }
 
 /*
@@ -2450,15 +2510,28 @@ static int io_prep_rw(struct io_kiocb *req, const struct io_uring_sqe *sqe,
 		req->flags |= REQ_F_ISREG;
 
 	kiocb->ki_pos = READ_ONCE(sqe->off);
+	kiocb->ki_flags = iocb_flags(kiocb->ki_filp);
+	ret = kiocb_set_rw_flags(kiocb, READ_ONCE(sqe->rw_flags));
+	if (unlikely(ret))
+		return ret;
+
+	if (unlikely((kiocb->ki_flags & IOCB_ZONE_APPEND))) {
+		req->addr2 = READ_ONCE(sqe->addr2);
+		if (unlikely(!access_ok(req->addr2, 64)))
+			return -EACCES;
+		if (__get_user(kiocb->ki_pos, (u64 __user*)req->addr2))
+			return -EFAULT;
+		get_task_struct(req->task);
+		req->flags |= REQ_F_ZONE_APPEND;
+	} else {
+		kiocb->ki_pos = READ_ONCE(sqe->off);
+	}
+
 	if (kiocb->ki_pos == -1 && !(req->file->f_mode & FMODE_STREAM)) {
 		req->flags |= REQ_F_CUR_POS;
 		kiocb->ki_pos = req->file->f_pos;
 	}
 	kiocb->ki_hint = ki_hint_validate(file_write_hint(kiocb->ki_filp));
-	kiocb->ki_flags = iocb_flags(kiocb->ki_filp);
-	ret = kiocb_set_rw_flags(kiocb, READ_ONCE(sqe->rw_flags));
-	if (unlikely(ret))
-		return ret;
 
 	ioprio = READ_ONCE(sqe->ioprio);
 	if (ioprio) {
