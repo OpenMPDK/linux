@@ -536,6 +536,7 @@ struct request_queue {
 	 */
 	unsigned int		nr_zones;
 	unsigned long		*conv_zones_bitmap;
+	unsigned long		*zrwa_zones_bitmap;
 	unsigned long		*seq_zones_wlock;
 	unsigned int		max_open_zones;
 	unsigned int		max_active_zones;
