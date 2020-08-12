@@ -952,6 +952,9 @@ blk_status_t nvme_setup_cmd(struct nvme_ns *ns, struct request *req,
 	case REQ_OP_ZONE_FINISH:
 		ret = nvme_setup_zone_mgmt_send(ns, req, cmd, NVME_ZONE_FINISH);
 		break;
+	case REQ_OP_ZONE_ZRWA_FLUSH:
+		ret = nvme_setup_zone_mgmt_send(ns, req, cmd, NVME_ZONE_ZRWA_FLUSH);
+		break;
 	case REQ_OP_WRITE_ZEROES:
 		ret = nvme_setup_write_zeroes(ns, req, cmd);
 		break;
