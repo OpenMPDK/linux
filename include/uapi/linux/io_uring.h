@@ -131,6 +131,7 @@ enum {
 	IORING_OP_PROVIDE_BUFFERS,
 	IORING_OP_REMOVE_BUFFERS,
 	IORING_OP_TEE,
+	IORING_OP_COPY,
 
 	/* this goes last, obviously */
 	IORING_OP_LAST,

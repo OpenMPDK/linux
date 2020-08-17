@@ -890,6 +890,13 @@ static const struct io_op_def io_op_defs[] = {
 		.hash_reg_file		= 1,
 		.unbound_nonreg_file	= 1,
 	},
+	[IORING_OP_COPY] = {
+		.async_ctx              = 1,
+		.needs_mm               = 1,
+		.needs_file             = 1,
+		.unbound_nonreg_file    = 1,
+		.pollout                = 1,
+	},
 };
 
 enum io_mem_account {
@@ -2285,6 +2292,7 @@ static bool io_resubmit_prep(struct io_kiocb *req, int error)
 	case IORING_OP_WRITEV:
 	case IORING_OP_WRITE_FIXED:
 	case IORING_OP_WRITE:
+	case IORING_OP_COPY:
 		rw = WRITE;
 		break;
 	default:
@@ -2841,7 +2849,8 @@ static ssize_t io_import_iovec(int rw, struct io_kiocb *req,
 	if (req->buf_index && !(req->flags & REQ_F_BUFFER_SELECT))
 		return -EINVAL;
 
-	if (opcode == IORING_OP_READ || opcode == IORING_OP_WRITE) {
+	if (opcode == IORING_OP_READ || opcode == IORING_OP_WRITE ||
+			opcode == IORING_OP_COPY) {
 		if (req->flags & REQ_F_BUFFER_SELECT) {
 			buf = io_rw_buffer_select(req, &sqe_len, needs_lock);
 			if (IS_ERR(buf)) {
@@ -3257,10 +3266,14 @@ static int io_write(struct io_kiocb *req, bool force_nonblock,
 	}
 	kiocb->ki_flags |= IOCB_WRITE;
 
-	if (req->file->f_op->write_iter)
-		ret2 = call_write_iter(req->file, kiocb, &iter);
-	else
-		ret2 = loop_rw_iter(WRITE, req->file, kiocb, &iter);
+	if (unlikely(req->opcode == IORING_OP_COPY))
+		ret2 = blkdev_copy_iter(kiocb, &iter);
+	else {
+		if (req->file->f_op->write_iter)
+			ret2 = call_write_iter(req->file, kiocb, &iter);
+		else
+			ret2 = loop_rw_iter(WRITE, req->file, kiocb, &iter);
+	}
 
 	/*
 	 * Raw bdev writes will return -EOPNOTSUPP for IOCB_NOWAIT. Just
@@ -5381,6 +5394,7 @@ static int io_req_defer_prep(struct io_kiocb *req,
 	case IORING_OP_WRITEV:
 	case IORING_OP_WRITE_FIXED:
 	case IORING_OP_WRITE:
+	case IORING_OP_COPY:
 		ret = io_write_prep(req, sqe, true);
 		break;
 	case IORING_OP_POLL_ADD:
@@ -5554,6 +5568,7 @@ static void __io_clean_op(struct io_kiocb *req)
 		case IORING_OP_WRITEV:
 		case IORING_OP_WRITE_FIXED:
 		case IORING_OP_WRITE:
+		case IORING_OP_COPY:
 			if (io->rw.iov != io->rw.fast_iov)
 				kfree(io->rw.iov);
 			break;
@@ -5595,6 +5610,7 @@ static int io_issue_sqe(struct io_kiocb *req, const struct io_uring_sqe *sqe,
 	case IORING_OP_WRITEV:
 	case IORING_OP_WRITE_FIXED:
 	case IORING_OP_WRITE:
+	case IORING_OP_COPY:
 		if (sqe) {
 			ret = io_write_prep(req, sqe, force_nonblock);
 			if (ret < 0)
