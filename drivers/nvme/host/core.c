@@ -680,6 +680,7 @@ static inline blk_status_t nvme_setup_copy(struct nvme_ns *ns,
 #else
 		range[nr_range].slba = cpu_to_le64(slba);
 #endif
+		range[nr_range].nlb = cpu_to_le16(ssrl - 1);
 		nr_range++;
 	}
 
