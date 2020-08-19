@@ -535,8 +535,23 @@ static inline u64 nvme_zns_slba2po2(u64 lba, struct nvme_ns *ns, int print)
 	res = lba - zid * ns->zsze_cap_diff;
 
 	if (print)
-		printk(KERN_CRIT "lba:%llu: out_lba:%llu (zid:%llu)\n",
-			lba, res, zid);
+		printk(KERN_CRIT "%s: lba:%llu: out_lba:%llu (zid:%llu)\n",
+			__func__, lba, res, zid);
+
+	return res;
+}
+
+static inline u64 nvme_zns_po22slba(u64 lba, struct nvme_ns *ns, int print)
+{
+	u64 res, zid;
+
+	zid = lba;
+	do_div(zid, ns->zone_cap_lb);
+
+	res = lba + zid * ns->zsze_cap_diff;
+	if (print)
+		printk(KERN_CRIT "%s: lba:%llu: out_lba:%llu (zid:%llu)\n",
+				__func__, lba, res, zid);
 
 	return res;
 }

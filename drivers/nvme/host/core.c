@@ -290,7 +290,8 @@ void nvme_complete_rq(struct request *req)
 	} else if (IS_ENABLED(CONFIG_BLK_DEV_ZONED) &&
 		   req_op(req) == REQ_OP_ZONE_APPEND) {
 		req->__sector = nvme_lba_to_sect(req->q->queuedata,
-			le64_to_cpu(nvme_req(req)->result.u64));
+			nvme_zns_po22slba(le64_to_cpu(nvme_req(req)->result.u64),
+				req->q->queuedata, 0));
 	}
 
 	nvme_trace_bio_complete(req, status);
@@ -816,7 +817,7 @@ static inline blk_status_t nvme_setup_rw(struct nvme_ns *ns,
 #ifdef CONFIG_BLK_DEV_ZONED
 	if (ns->is_zmap)
 		cmnd->rw.slba = cpu_to_le64(nvme_zns_slba2po2(
-				nvme_sect_to_lba(ns, blk_rq_pos(req)), ns, 1));
+				nvme_sect_to_lba(ns, blk_rq_pos(req)), ns, 0));
 	else
 		cmnd->rw.slba = cpu_to_le64(nvme_sect_to_lba(ns, blk_rq_pos(req)));
 #else
