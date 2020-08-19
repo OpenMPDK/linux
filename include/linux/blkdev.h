@@ -226,6 +226,7 @@ struct request {
 
 	unsigned short write_hint;
 	unsigned short ioprio;
+	unsigned short copy_ranges;
 
 	enum mq_rq_state state;
 	refcount_t ref;

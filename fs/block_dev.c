@@ -1970,10 +1970,11 @@ static void blkdev_copy_endio(struct bio *bio)
 	 * this is being reused here to return copied source-ranges
 	 * this could be useful for error-handling in partial copy-scenario
 	 *
-	 * Commented during rebase without append.
 	 */
-	/* if (ret) */
-		/* res = bio->bi_iter.bi_sector; */
+	 if (unlikely(ret))
+		res = bio->bi_copy_ranges;
+	 else
+		 ret = bio->bi_copy_ranges << SECTOR_SHIFT;
 
 	iocb->ki_complete(iocb, ret, res);
 

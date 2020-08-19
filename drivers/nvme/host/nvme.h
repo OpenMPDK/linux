@@ -587,6 +587,10 @@ static inline bool nvme_end_request(struct request *req, __le16 status,
 
 	rq->status = le16_to_cpu(status) >> 1;
 	rq->result = result;
+
+	if (op_is_copy(req_op(req)) && status != NVME_SC_SUCCESS)
+		req->copy_ranges = le64_to_cpu(result.u64 & 0xffff);
+
 	/* inject error when permitted by fault injection framework */
 	nvme_should_fail(req);
 	if (unlikely(blk_should_fake_timeout(req->q)))
