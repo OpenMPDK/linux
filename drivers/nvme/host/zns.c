@@ -236,6 +236,15 @@ out:
 	return cb(&zone, idx, data);
 }
 
+inline sector_t adjust_po2_sector(struct nvme_ns *ns, sector_t sector)
+{
+       sector_t res;
+       u64 zone = sector;
+       do_div(zone, ns->zsze_po2);
+       res = sector - zone * (ns->zsze_po2 - ns->zsze);
+       return res;
+}
+
 static int nvme_ns_report_zones(struct nvme_ns *ns, sector_t sector,
 			unsigned int nr_zones, report_zones_cb cb, void *data)
 {
@@ -244,15 +253,22 @@ static int nvme_ns_report_zones(struct nvme_ns *ns, sector_t sector,
 	unsigned int nz, i;
 	u64 off = 0;
 	size_t buflen;
+	/* Kanchan: workaround only for po2-emulation, find clean way */
+	sector_t sector2 = 0;
 
 	report = nvme_zns_alloc_report_buffer(ns, nr_zones, &buflen);
 	if (!report)
 		return -ENOMEM;
-
-	sector &= ~(ns->zsze_po2 - 1);
+	/*
+	 * sector is for po2 address space, bring that down to actual
+	 * address-space
+	 */
+	sector2 = adjust_po2_sector(ns, sector);
+	//sector &= ~(ns->zsze_po2 - 1);
+	//sector2 = sector;
 	while (zone_idx < nr_zones && sector < get_capacity(ns->disk)) {
 		memset(report, 0, buflen);
-		ret = __nvme_ns_report_zones(ns, sector, report, buflen);
+		ret = __nvme_ns_report_zones(ns, sector2, report, buflen);
 		if (ret < 0)
 			goto out_free;
 
@@ -269,6 +285,7 @@ static int nvme_ns_report_zones(struct nvme_ns *ns, sector_t sector,
 			off += ns->zsze_cap_diff;
 		}
 
+		sector2 += ns->zsze * nz;
 		sector += ns->zsze_po2 * nz;
 	}
 
