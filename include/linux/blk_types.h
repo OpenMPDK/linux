@@ -194,7 +194,7 @@ struct bio {
 	blk_status_t		bi_status;
 	u8			bi_partno;
 	atomic_t		__bi_remaining;
-	unsigned short		bi_copy_ranges;
+	unsigned int		bi_copy_ranges;
 
 	struct bvec_iter	bi_iter;
 
