@@ -60,6 +60,16 @@ static inline sector_t blk_zone_start(struct request_queue *q,
 	return sector & ~zone_mask;
 }
 
+static inline bool blk_req_is_zrwa_zone(struct request *rq)
+{
+	if (rq->q->zrwa_zones_bitmap &&
+			test_bit(blk_queue_zone_no(rq->q, blk_rq_pos(rq)),
+						rq->q->zrwa_zones_bitmap))
+		return true;
+
+	return false;
+}
+
 /*
  * Return true if a request is a write requests that needs zone write locking.
  */
@@ -76,7 +86,10 @@ bool blk_req_needs_zone_write_lock(struct request *rq)
 	case REQ_OP_WRITE_SAME:
 	case REQ_OP_WRITE:
 	case REQ_OP_COPY:
-		return blk_rq_zone_is_seq(rq);
+		if (blk_req_is_zrwa_zone(rq))
+			return false;
+		else
+			return blk_rq_zone_is_seq(rq);
 	default:
 		return false;
 	}

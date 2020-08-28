@@ -748,9 +748,6 @@ static inline bool blk_queue_zone_is_seq(struct request_queue *q,
 		return false;
 	if (!q->conv_zones_bitmap)
 		return true;
-	if (q->conv_zones_bitmap && test_bit(blk_queue_zone_no(q, sector),
-						q->zrwa_zones_bitmap))
-		return false;
 	return !test_bit(blk_queue_zone_no(q, sector), q->conv_zones_bitmap);
 }
 
