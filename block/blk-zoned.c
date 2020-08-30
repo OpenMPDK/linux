@@ -130,28 +130,16 @@ void __blk_req_zone_write_unlock(struct request *rq)
 }
 EXPORT_SYMBOL_GPL(__blk_req_zone_write_unlock);
 
-void __blk_req_zone_zrwa_set(struct request_queue *q, sector_t sector)
+/* caller of below two helpers already check whether device is zoned */
+inline void __blk_req_zone_zrwa_set(struct request_queue *q, unsigned int nr)
 {
-	sector_t zone_sectors = blk_queue_zone_sectors(q);
-	long nr;
-
-	nr = sector / zone_sectors;
 	WARN_ON_ONCE(test_and_set_bit(nr, q->zrwa_zones_bitmap));
 }
-EXPORT_SYMBOL_GPL(__blk_req_zone_zrwa_set);
 
-void __blk_req_zone_zrwa_clear(struct request_queue *q, sector_t sector)
+inline void __blk_req_zone_zrwa_clear(struct request_queue *q, unsigned int nr)
 {
-	sector_t zone_sectors = blk_queue_zone_sectors(q);
-	long nr;
-
-	if (!blk_queue_is_zoned(q))
-		return;
-
-	nr = sector / zone_sectors;
 	WARN_ON_ONCE(!test_and_clear_bit(nr, q->zrwa_zones_bitmap));
 }
-EXPORT_SYMBOL_GPL(__blk_req_zone_zrwa_clear);
 
 /**
  * blkdev_nr_zones - Get number of zones
@@ -307,11 +295,11 @@ int blkdev_zone_mgmt(struct block_device *bdev, enum req_opf op,
 	bio_put(bio);
 	if (!ret && q->zrwa_zones_bitmap) {
 		if (op & REQ_ZONE_ZRWA)
-			__blk_req_zone_zrwa_set(q, nr * zone_sectors);
+			__blk_req_zone_zrwa_set(q, nr);
 		else if (((op & REQ_OP_ZONE_CLOSE) ||
 				(op & REQ_OP_ZONE_RESET)) &&
 				(test_bit(nr, q->zrwa_zones_bitmap)))
-			__blk_req_zone_zrwa_clear(q, nr * zone_sectors);
+			__blk_req_zone_zrwa_clear(q, nr);
 	}
 
 	return ret;
