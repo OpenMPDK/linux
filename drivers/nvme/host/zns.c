@@ -38,28 +38,6 @@ static int nvme_set_max_append(struct nvme_ctrl *ctrl)
 	return 0;
 }
 
-static u64 nvme_zns_nr_zones(struct nvme_ns *ns)
-{
-	struct nvme_command c = { };
-	struct nvme_zone_report report;
-	int buflen = sizeof(struct nvme_zone_report);
-	int ret;
-
-	c.zmr.opcode = nvme_cmd_zone_mgmt_recv;
-	c.zmr.nsid = cpu_to_le32(ns->head->ns_id);
-	c.zmr.slba = cpu_to_le64(0);
-	c.zmr.numd = cpu_to_le32(nvme_bytes_to_numd(buflen));
-	c.zmr.zra = NVME_ZRA_ZONE_REPORT;
-	c.zmr.zrasf = NVME_ZRASF_ZONE_REPORT_ALL;
-	c.zmr.pr = 0;
-
-	ret = nvme_submit_sync_cmd(ns->queue, &c, &report, buflen);
-	if (ret)
-		return ret;
-
-	return le64_to_cpu(report.nr_zones);
-}
-
 int nvme_update_zone_info(struct gendisk *disk, struct nvme_ns *ns,
 			  unsigned lbaf)
 {
@@ -128,8 +106,6 @@ int nvme_update_zone_info(struct gendisk *disk, struct nvme_ns *ns,
 		status = -EINVAL;
 		goto free_data;
 	}
-
-	ns->nr_zones = nvme_zns_nr_zones(ns);
 	ns->mar = le32_to_cpu(id->mar);
 	ns->mor = le32_to_cpu(id->mor);
 	ns->rrl = le32_to_cpu(id->rrl);

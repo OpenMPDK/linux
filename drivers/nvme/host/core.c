@@ -2130,6 +2130,8 @@ static void nvme_update_disk_info(struct gendisk *disk,
 		capacity = 0;
 
 #ifdef CONFIG_BLK_DEV_ZONED
+	if (blk_queue_is_zoned(disk->queue))
+		ns->nr_zones = id->ncap / ns->zone_cap_lb;
 	/* Need to report a capacity that matches the po2 zone address space */
 	if (ns->is_zmap)
 		capacity = nvme_lba_to_sect(ns, nvme_zns_capacity(ns));
