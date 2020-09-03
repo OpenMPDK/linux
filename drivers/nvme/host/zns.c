@@ -128,8 +128,9 @@ int nvme_update_zone_info(struct gendisk *disk, struct nvme_ns *ns,
 		status = -EINVAL;
 		goto free_data;
 	}
-
-	ns->nr_zones = nvme_zns_nr_zones(ns);
+	/* workaround to avoid sending ZMR during ns format */
+	if (!ns->nr_zones)
+		ns->nr_zones = nvme_zns_nr_zones(ns);
 	ns->mar = le32_to_cpu(id->mar);
 	ns->mor = le32_to_cpu(id->mor);
 	ns->rrl = le32_to_cpu(id->rrl);
