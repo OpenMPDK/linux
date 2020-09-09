@@ -2382,7 +2382,7 @@ static void get_new_segment(struct f2fs_sb_info *sbi,
 			unsigned int *newseg, bool new_sec, int dir)
 {
 	struct free_segmap_info *free_i = FREE_I(sbi);
-	unsigned int segno, secno, zoneno;
+	unsigned int segno, secno, zoneno, oldseg = *newseg;
 	unsigned int total_zones = MAIN_SECS(sbi) / sbi->secs_per_zone;
 	unsigned int hint = GET_SEC_FROM_SEG(sbi, *newseg);
 	unsigned int old_zoneno = GET_ZONE_FROM_SEG(sbi, *newseg);
@@ -2400,6 +2400,7 @@ static void get_new_segment(struct f2fs_sb_info *sbi,
 			goto got_it;
 	}
 find_other_zone:
+	f2fs_blk_mgmt_segno(sbi, oldseg, REQ_OP_ZONE_CLOSE);
 	secno = find_next_zero_bit(free_i->free_secmap, MAIN_SECS(sbi), hint);
 	if (secno >= MAIN_SECS(sbi)) {
 		if (dir == ALLOC_RIGHT) {
@@ -2428,6 +2429,8 @@ find_other_zone:
 skip_left:
 	segno = GET_SEG_FROM_SEC(sbi, secno);
 	zoneno = GET_ZONE_FROM_SEC(sbi, secno);
+
+	f2fs_blk_mgmt_segno(sbi, segno, REQ_OP_ZONE_OPEN);
 
 	/* give up on finding another zone */
 	if (!init)
@@ -4366,6 +4369,8 @@ static int sanity_check_curseg(struct f2fs_sb_info *sbi)
 		struct seg_entry *se = get_seg_entry(sbi, curseg->segno);
 		unsigned int blkofs = curseg->next_blkoff;
 
+		f2fs_blk_mgmt_segno(sbi, curseg->segno, REQ_OP_ZONE_OPEN);
+
 		if (f2fs_test_bit(blkofs, se->cur_valid_map))
 			goto out;
 
@@ -4631,6 +4636,35 @@ int f2fs_check_write_pointer(struct f2fs_sb_info *sbi)
 
 	return 0;
 }
+
+int f2fs_blk_mgmt_segno(struct f2fs_sb_info *sbi, unsigned int segno, int type)
+{
+	struct f2fs_dev_info *zbd;
+	unsigned int secno, first_seg;
+	unsigned int log_sectors_per_block = sbi->log_blocksize - SECTOR_SHIFT;
+	sector_t zone_sector, nr_sectors;
+	block_t zone_block = START_BLOCK(sbi, segno);
+	int ret;
+
+	zbd = get_target_zoned_dev(sbi, zone_block);
+	if (!zbd)
+		return 0;
+
+	if (type == REQ_OP_ZONE_CLOSE) {
+		secno = GET_SEC_FROM_SEG(sbi, segno);
+		first_seg = GET_SEG_FROM_SEC(sbi, secno);
+		zone_block = START_BLOCK(sbi, first_seg);
+	}
+
+	zone_sector = (sector_t)(zone_block - zbd->start_blk)
+		<< log_sectors_per_block;
+	nr_sectors = (sbi->segs_per_sec * sbi->blocks_per_seg) << log_sectors_per_block;
+	ret = blkdev_zone_mgmt(zbd->bdev, type, zone_sector, nr_sectors, GFP_NOFS);
+	if (ret)
+		f2fs_notice(sbi, "zone mgmt failure. continuing with non zrwa");
+
+	return ret;
+}
 #else
 int f2fs_fix_curseg_write_pointer(struct f2fs_sb_info *sbi)
 {
@@ -4638,6 +4672,11 @@ int f2fs_fix_curseg_write_pointer(struct f2fs_sb_info *sbi)
 }
 
 int f2fs_check_write_pointer(struct f2fs_sb_info *sbi)
+{
+	return 0;
+}
+
+int f2fs_blk_mgmt_segno(struct f2fs_sb_info *sbi, unsigned int segno, int type)
 {
 	return 0;
 }

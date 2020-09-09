@@ -1383,7 +1383,7 @@ static int do_checkpoint(struct f2fs_sb_info *sbi, struct cp_control *cpc)
 	struct f2fs_nm_info *nm_i = NM_I(sbi);
 	unsigned long orphan_num = sbi->im[ORPHAN_INO].ino_num, flags;
 	block_t start_blk;
-	unsigned int data_sum_blocks, orphan_blocks;
+	unsigned int data_sum_blocks, orphan_blocks, segno;
 	__u32 crc32 = 0;
 	int i;
 	int cp_payload_blks = __cp_payload(sbi);
@@ -1399,16 +1399,18 @@ static int do_checkpoint(struct f2fs_sb_info *sbi, struct cp_control *cpc)
 	ckpt->elapsed_time = cpu_to_le64(get_mtime(sbi, true));
 	ckpt->free_segment_count = cpu_to_le32(free_segments(sbi));
 	for (i = 0; i < NR_CURSEG_NODE_TYPE; i++) {
-		ckpt->cur_node_segno[i] =
-			cpu_to_le32(curseg_segno(sbi, i + CURSEG_HOT_NODE));
+		segno = curseg_segno(sbi, i + CURSEG_HOT_NODE);
+		ckpt->cur_node_segno[i] = cpu_to_le32(segno);
+		f2fs_blk_mgmt_segno(sbi, segno, REQ_OP_ZONE_CLOSE);
 		ckpt->cur_node_blkoff[i] =
 			cpu_to_le16(curseg_blkoff(sbi, i + CURSEG_HOT_NODE));
 		ckpt->alloc_type[i + CURSEG_HOT_NODE] =
 				curseg_alloc_type(sbi, i + CURSEG_HOT_NODE);
 	}
 	for (i = 0; i < NR_CURSEG_DATA_TYPE; i++) {
-		ckpt->cur_data_segno[i] =
-			cpu_to_le32(curseg_segno(sbi, i + CURSEG_HOT_DATA));
+		segno = curseg_segno(sbi, i + CURSEG_HOT_DATA);
+		ckpt->cur_data_segno[i] = cpu_to_le32(segno);
+		f2fs_blk_mgmt_segno(sbi, segno, REQ_OP_ZONE_CLOSE);
 		ckpt->cur_data_blkoff[i] =
 			cpu_to_le16(curseg_blkoff(sbi, i + CURSEG_HOT_DATA));
 		ckpt->alloc_type[i + CURSEG_HOT_DATA] =
