@@ -4105,6 +4105,9 @@ static inline bool f2fs_force_buffered_io(struct inode *inode,
 	return false;
 }
 
+extern int f2fs_blk_mgmt_segno(struct f2fs_sb_info *sbi, unsigned int segno,
+		int type);
+
 #ifdef CONFIG_F2FS_FAULT_INJECTION
 extern void f2fs_build_fault_attr(struct f2fs_sb_info *sbi, unsigned int rate,
 							unsigned int type);
