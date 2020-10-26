@@ -170,10 +170,13 @@ static int __nvme_ns_report_zones(struct nvme_ns *ns, sector_t sector,
 	c.zmr.pr = NVME_REPORT_ZONE_PARTIAL;
 
 	ret = nvme_submit_sync_cmd(ns->queue, &c, report, buflen);
-	if (ret)
-		return ret;
 
-	return le64_to_cpu(report->nr_zones);
+	if(!ret)
+		return le64_to_cpu(report->nr_zones);
+	else if (ret > 0)
+		return -EIO;
+	else
+		return ret;
 }
 
 static int nvme_zone_parse_entry(struct nvme_ns *ns,
