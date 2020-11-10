@@ -239,8 +239,11 @@ static void print_req_error(struct request *req, blk_status_t status,
 static void req_bio_endio(struct request *rq, struct bio *bio,
 			  unsigned int nbytes, blk_status_t error)
 {
-	if (error)
+	if (error) {
 		bio->bi_status = error;
+		if (req_op(rq) == REQ_OP_COPY)
+			bio->bi_copy_ranges = rq->copy_ranges;
+	}
 
 	if (unlikely(rq->rq_flags & RQF_QUIET))
 		bio_set_flag(bio, BIO_QUIET);
@@ -854,6 +857,10 @@ static noinline_for_stack bool submit_bio_checks(struct bio *bio)
 	switch (bio_op(bio)) {
 	case REQ_OP_DISCARD:
 		if (!blk_queue_discard(q))
+			goto not_supported;
+		break;
+	case REQ_OP_COPY:
+		if (!blk_queue_copy(q))
 			goto not_supported;
 		break;
 	case REQ_OP_SECURE_ERASE:
