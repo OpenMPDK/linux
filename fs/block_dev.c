@@ -1926,6 +1926,75 @@ ssize_t blkdev_read_iter(struct kiocb *iocb, struct iov_iter *to)
 }
 EXPORT_SYMBOL_GPL(blkdev_read_iter);
 
+static void blkdev_copy_endio(struct bio *bio)
+{
+	struct kiocb *iocb = (struct kiocb *)bio->bi_private;
+	int ret = blk_status_to_errno(bio->bi_status);
+	long res = 0;
+
+	/* TBD:
+	 * bi_comp_lba was originally introduced for zone-append.
+	 * this is being reused here to return copied source-ranges
+	 * this could be useful for error-handling in partial copy-scenario
+	 *
+	 */
+	if (unlikely(ret))
+		res = bio->bi_copy_ranges;
+	else
+		ret = bio->bi_copy_ranges << SECTOR_SHIFT;
+
+	iocb->ki_complete(iocb, ret, res);
+
+	kfree(page_address(bio_first_bvec_all(bio)->bv_page) +
+			bio_first_bvec_all(bio)->bv_offset);
+	bio_put(bio);
+}
+
+ssize_t blkdev_copy_iter(struct kiocb *iocb, struct iov_iter *from)
+{
+	struct file *file = iocb->ki_filp;
+	struct inode *inode = bdev_file_inode(file);
+	struct block_device *bdev = I_BDEV(inode);
+	struct bio *bio = NULL;
+	struct range_entry *rlist;
+	loff_t pos = iocb->ki_pos;
+	sector_t dest;
+	unsigned short nr_srcs;
+	int ret = 0;
+
+	if (pos & ((1 << SECTOR_SHIFT) - 1))
+		return -EINVAL;
+	dest = pos >> SECTOR_SHIFT;
+	nr_srcs = from->iov->iov_len / sizeof(*rlist);
+
+	rlist = kmalloc_array(nr_srcs, sizeof(*rlist), GFP_ATOMIC |
+			__GFP_NOWARN);
+	if (!rlist)
+		return -ENOMEM;
+
+	if (copy_from_user(rlist, from->iov->iov_base,
+				sizeof(*rlist) * nr_srcs)) {
+		ret = -EFAULT;
+		goto out;
+	}
+
+	ret = __blkdev_issue_copy(bdev, dest, nr_srcs, rlist, 0, 0, &bio);
+	if (ret)
+		goto out;
+
+	bio->bi_private = iocb;
+	bio->bi_end_io = blkdev_copy_endio;
+	bio->bi_ioprio = iocb->ki_ioprio;
+	bio->bi_write_hint = iocb->ki_hint;
+	submit_bio(bio);
+
+	ret = -EIOCBQUEUED;
+out:
+	kfree(rlist);
+	return ret;
+}
+EXPORT_SYMBOL_GPL(blkdev_copy_iter);
+
 /*
  * Try to release a page associated with block device when the system
  * is under memory pressure.
