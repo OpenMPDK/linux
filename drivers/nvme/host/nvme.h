@@ -286,6 +286,7 @@ struct nvme_ctrl {
 	u8 vwc;
 	u32 vs;
 	u32 sgls;
+	u16 ocfs;
 	u16 kas;
 	u8 npss;
 	u8 apsta;
@@ -439,6 +440,9 @@ struct nvme_ns {
 	u16 ms;
 	u16 sgs;
 	u32 sws;
+	u32 mcl;
+	u16 mssrl;
+	u8 msrc;
 	u8 pi_type;
 #ifdef CONFIG_BLK_DEV_ZONED
 	u64 zsze;
@@ -553,6 +557,10 @@ static inline bool nvme_try_complete_req(struct request *req, __le16 status,
 
 	rq->status = le16_to_cpu(status) >> 1;
 	rq->result = result;
+
+	if (op_is_copy(req_op(req)) && status != NVME_SC_SUCCESS)
+		req->copy_ranges = le64_to_cpu(result.u64 & 0xffff);
+
 	/* inject error when permitted by fault injection framework */
 	nvme_should_fail(req);
 	if (unlikely(blk_should_fake_timeout(req->q)))
