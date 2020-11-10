@@ -1541,6 +1541,51 @@ static int aio_read(struct kiocb *req, const struct iocb *iocb,
 	return ret;
 }
 
+/* aio_copy copied from aio_write */
+static int aio_copy(struct kiocb *req, const struct iocb *iocb,
+			 bool compat)
+{
+	struct iovec inline_vecs[UIO_FASTIOV], *iovec = inline_vecs;
+	struct iov_iter iter;
+	struct file *file;
+	int ret;
+
+	ret = aio_prep_rw(req, iocb);
+	if (ret)
+		return ret;
+	file = req->ki_filp;
+
+	if (unlikely(!(file->f_mode & FMODE_WRITE)))
+		return -EBADF;
+
+	ret = aio_setup_rw(WRITE, iocb, &iovec, false, compat, &iter);
+	if (ret < 0)
+		return ret;
+
+	//TODO how to verify for copy
+	ret = rw_verify_area(WRITE, file, &req->ki_pos, iov_iter_count(&iter));
+	if (!ret) {
+		/*
+		 * Open-code file_start_write here to grab freeze protection,
+		 * which will be released by another thread in
+		 * aio_complete_rw().  Fool lockdep by telling it the lock got
+		 * released so that it doesn't complain about the held lock when
+		 * we return to userspace.
+		 */
+		if (S_ISREG(file_inode(file)->i_mode)) {
+			__sb_start_write(file_inode(file)->i_sb,
+					SB_FREEZE_WRITE, true);
+			__sb_writers_release(file_inode(file)->i_sb,
+					SB_FREEZE_WRITE);
+		}
+
+		req->ki_flags |= IOCB_WRITE;
+		aio_rw_done(req, blkdev_copy_iter(req, &iter));
+	}
+	kfree(iovec);
+	return ret;
+}
+
 static int aio_write(struct kiocb *req, const struct iocb *iocb,
 			 bool vectored, bool compat)
 {
@@ -1836,6 +1881,8 @@ static int __io_submit_one(struct kioctx *ctx, const struct iocb *iocb,
 		return aio_read(&req->rw, iocb, true, compat);
 	case IOCB_CMD_PWRITEV:
 		return aio_write(&req->rw, iocb, true, compat);
+	case IOCB_CMD_COPY:
+		return aio_copy(&req->rw, iocb, compat);	//TODO compat
 	case IOCB_CMD_FSYNC:
 		return aio_fsync(&req->fsync, iocb, false);
 	case IOCB_CMD_FDSYNC:
