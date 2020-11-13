@@ -3627,7 +3627,7 @@ static int io_write(struct io_kiocb *req, bool force_nonblock,
 	kiocb->ki_flags |= IOCB_WRITE;
 
 	if (unlikely(req->opcode == IORING_OP_COPY))
-		ret2 = blkdev_copy_iter(kiocb, iter);
+		ret2 = call_copy_iter(req->file, kiocb, iter);
 	else {
 		if (req->file->f_op->write_iter)
 			ret2 = call_write_iter(req->file, kiocb, iter);
