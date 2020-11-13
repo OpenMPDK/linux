@@ -1580,7 +1580,7 @@ static int aio_copy(struct kiocb *req, const struct iocb *iocb,
 		}
 
 		req->ki_flags |= IOCB_WRITE;
-		aio_rw_done(req, blkdev_copy_iter(req, &iter));
+		aio_rw_done(req, call_copy_iter(file, req, &iter));
 	}
 	kfree(iovec);
 	return ret;
