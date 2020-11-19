@@ -743,6 +743,36 @@ static inline int bio_check_eod(struct bio *bio, sector_t maxsector)
 /*
  * Remap block n of partition p to block n+start(p) of the disk.
  */
+static inline int blk_copy_payload_partition_remap(struct bio *bio)
+{
+	struct hd_struct *p;
+	int ret = -EIO;
+	struct range_entry *payload;
+	unsigned short segments;
+	int i;
+
+	rcu_read_lock();
+
+	p = __disk_get_part(bio->bi_disk, bio->bi_partno);
+	if (unlikely(!p))
+		goto out;
+
+	payload = bio_data(bio);
+	segments = payload[0].len;
+
+	for (i = 1; i <= segments; i++) {
+		//TODO source extending beyond eod
+		payload[i].src += p->start_sect;
+	}
+
+	ret = 0;
+out:
+	rcu_read_unlock();
+	return ret;
+}
+/*
+ * Remap block n of partition p to block n+start(p) of the disk.
+ */
 static inline int blk_partition_remap(struct bio *bio)
 {
 	struct hd_struct *p;
@@ -862,6 +892,8 @@ static noinline_for_stack bool submit_bio_checks(struct bio *bio)
 	case REQ_OP_COPY:
 		if (!blk_queue_copy(q))
 			goto not_supported;
+		if(unlikely(blk_copy_payload_partition_remap(bio)))
+			goto end_io;
 		break;
 	case REQ_OP_SECURE_ERASE:
 		if (!blk_queue_secure_erase(q))
