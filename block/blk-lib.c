@@ -151,7 +151,7 @@ int blkdev_issue_discard(struct block_device *bdev, sector_t sector,
 EXPORT_SYMBOL(blkdev_issue_discard);
 
 int blk_copy_offload(struct block_device *bdev, struct blk_copy_payload *payload,
-		sector_t dest, gfp_t gfp_mask)
+		sector_t dest, gfp_t gfp_mask, int flags, struct bio **biop)
 {
 	struct request_queue *q = bdev_get_queue(bdev);
 	struct bio *bio;
@@ -166,6 +166,10 @@ int blk_copy_offload(struct block_device *bdev, struct blk_copy_payload *payload
 	bio->bi_opf = REQ_OP_COPY | REQ_NOMERGE;
 	bio_set_dev(bio, bdev);
 
+	if (flags && BLKDEV_COPY_RETURN_BIO) {
+		*biop = bio;
+		return 0;
+	}
 	ret = submit_bio_wait(bio);
 err:
 	bio_put(bio);
@@ -334,7 +338,7 @@ out:
 
 int blkdev_issue_copy(struct block_device *src_bdev, int nr_srcs,
 		struct range_entry *src_rlist, struct block_device *dest_bdev,
-		sector_t dest, gfp_t gfp_mask, int flags)
+		sector_t dest, gfp_t gfp_mask, int flags, struct bio **biop)
 {
 	struct request_queue *q = bdev_get_queue(src_bdev);
 	struct request_queue *dest_q = bdev_get_queue(dest_bdev);
@@ -354,9 +358,14 @@ int blkdev_issue_copy(struct block_device *src_bdev, int nr_srcs,
 	}
 
 	if (q == dest_q && q->limits.copy_offload) {
-		ret = blk_copy_offload(src_bdev, payload, dest, gfp_mask);
+		ret = blk_copy_offload(src_bdev, payload, dest, gfp_mask, flags, biop);
 		if (ret)
 			goto out;
+		else {
+			if (flags & BLKDEV_COPY_RETURN_BIO) {
+				return 0;
+			}
+		}
 	} else if (flags & BLKDEV_COPY_NOEMULATION) {
 		ret = -EIO;
 		goto out;

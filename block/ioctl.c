@@ -165,7 +165,7 @@ static int blk_ioctl_copy(struct block_device *bdev, fmode_t mode,
 	}
 
 	ret = blkdev_issue_copy(bdev, crange.nr_range, rlist, bdev, crange.dest,
-			GFP_KERNEL, flags);
+			GFP_KERNEL, flags, NULL);
 out:
 	kfree(rlist);
 	return ret;

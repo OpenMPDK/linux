@@ -595,7 +595,7 @@ static int run_copy_job(struct kcopyd_job *job)
 		srange.len = job->source.count;
 
 		r = blkdev_issue_copy(job->source.bdev, 1, &srange,
-			job->dests[i].bdev, job->dests[i].sector, GFP_KERNEL, flags);
+			job->dests[i].bdev, job->dests[i].sector, GFP_KERNEL, flags, NULL);
 		if (r)
 			break;
 

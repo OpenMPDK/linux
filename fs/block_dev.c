@@ -1760,7 +1760,7 @@ ssize_t blkdev_copy_iter(struct kiocb *iocb, struct iov_iter *from)
 	}
 
 	flags |= BLKDEV_COPY_RETURN_BIO;
-	ret = blkdev_issue_copy(bdev, nr_srcs, rlist, bdev, dest, GFP_KERNEL, flags);
+	ret = blkdev_issue_copy(bdev, nr_srcs, rlist, bdev, dest, GFP_KERNEL, flags, &bio);
 	if (ret)
 		goto out;
 

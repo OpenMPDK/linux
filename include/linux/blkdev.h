@@ -1352,10 +1352,11 @@ extern int __blkdev_issue_discard(struct block_device *bdev, sector_t sector,
 		struct bio **biop);
 
 #define BLKDEV_COPY_NOEMULATION	(1 << 0)	/* do not emulate if copy offload not supported */
+#define BLKDEV_COPY_RETURN_BIO	(1 << 1)	/* prepare bio and return to caller */
 
 int blkdev_issue_copy(struct block_device *src_bdev, int nr_srcs,
 		struct range_entry *src_rlist, struct block_device *dest_bdev,
-		sector_t dest, gfp_t gfp_mask, int flags);
+		sector_t dest, gfp_t gfp_mask, int flags, struct bio **biop);
 
 #define BLKDEV_ZERO_NOUNMAP	(1 << 0)  /* do not free blocks */
 #define BLKDEV_ZERO_NOFALLBACK	(1 << 1)  /* don't write explicit zeroes */
