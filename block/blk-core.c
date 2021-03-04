@@ -719,6 +719,17 @@ static noinline int should_fail_bio(struct bio *bio)
 }
 ALLOW_ERROR_INJECTION(should_fail_bio, ERRNO);
 
+static inline int bio_check_copy_eod(struct bio *bio, sector_t start,
+		sector_t nr_sectors, sector_t max_sect)
+{
+	if (nr_sectors && max_sect &&
+	    (nr_sectors > max_sect || start > max_sect - nr_sectors)) {
+		handle_bad_sector(bio, max_sect);
+		return -EIO;
+	}
+	return 0;
+}
+
 /*
  * Check whether this bio extends beyond the end of the device or partition.
  * This may well happen - the kernel calls bread() without checking the size of
@@ -736,6 +747,80 @@ static inline int bio_check_eod(struct bio *bio)
 		return -EIO;
 	}
 	return 0;
+}
+
+/*
+ * Check for copy limits and remap source ranges if needed.
+ */
+static int blk_check_copy(struct bio *bio)
+{
+	struct blk_copy_payload *payload = bio_data(bio);
+	struct request_queue *q = bio->bi_bdev->bd_disk->queue;
+	sector_t max_sect, start_sect, copy_size = 0;
+	sector_t src_max_sect, src_start_sect;
+	struct block_device *bd_part;
+	int i, ret = -EIO;
+
+	rcu_read_lock();
+
+	bd_part = bio->bi_bdev;
+	if (unlikely(!bd_part)) {
+		rcu_read_unlock();
+		goto out;
+	}
+
+	max_sect =  bdev_nr_sectors(bd_part);
+	start_sect = bd_part->bd_start_sect;
+
+	src_max_sect = bdev_nr_sectors(payload->src_bdev);
+	src_start_sect = payload->src_bdev->bd_start_sect;
+
+	if (unlikely(should_fail_request(bd_part, bio->bi_iter.bi_size)))
+		goto err;
+
+	if (unlikely(bio_check_ro(bio)))
+		goto err;
+
+	rcu_read_unlock();
+
+	/* cannot handle copy crossing nr_ranges limit */
+	if (payload->copy_nr_ranges > q->limits.max_copy_nr_ranges)
+		goto out;
+
+	for (i = 0; i < payload->copy_nr_ranges; i++) {
+		ret = bio_check_copy_eod(bio, payload->range[i].src,
+				payload->range[i].len, src_max_sect);
+		if (unlikely(ret))
+			goto out;
+
+		/* single source range length limit */
+		if (payload->range[i].len > q->limits.max_copy_range_sectors) {
+			ret = -EIO;
+			goto out;
+		}
+
+		payload->range[i].src += src_start_sect;
+		copy_size += payload->range[i].len;
+	}
+
+	/* check if copy length crosses eod */
+	ret = bio_check_copy_eod(bio, bio->bi_iter.bi_sector,
+				copy_size, max_sect);
+	if (unlikely(ret))
+		goto out;
+
+	/* cannot handle copy more than copy limits */
+	if (copy_size > q->limits.max_copy_sectors) {
+		ret = -EIO;
+		goto out;
+	}
+
+	bio->bi_iter.bi_sector += start_sect;
+	return 0;
+err:
+	rcu_read_unlock();
+out:
+	return ret;
 }
 
 /*
@@ -795,7 +880,7 @@ static inline blk_status_t blk_check_zone_append(struct request_queue *q,
 static noinline_for_stack bool submit_bio_checks(struct bio *bio)
 {
 	struct block_device *bdev = bio->bi_bdev;
-	struct request_queue *q = bdev->bd_disk->queue;
+	struct request_queue *q = bio->bi_bdev->bd_disk->queue;
 	blk_status_t status = BLK_STS_IOERR;
 	struct blk_plug *plug;
 
@@ -814,13 +899,15 @@ static noinline_for_stack bool submit_bio_checks(struct bio *bio)
 
 	if (should_fail_bio(bio))
 		goto end_io;
-	if (unlikely(bio_check_ro(bio)))
-		goto end_io;
-	if (!bio_flagged(bio, BIO_REMAPPED)) {
-		if (unlikely(bio_check_eod(bio)))
+	if (likely(!op_is_copy(bio->bi_opf))) {
+		if (unlikely(bio_check_ro(bio)))
 			goto end_io;
-		if (bdev->bd_partno && unlikely(blk_partition_remap(bio)))
-			goto end_io;
+		if (!bio_flagged(bio, BIO_REMAPPED)) {
+			if (unlikely(bio_check_eod(bio)))
+				goto end_io;
+			if (bdev->bd_partno && unlikely(blk_partition_remap(bio)))
+				goto end_io;
+		}
 	}
 
 	/*
@@ -843,6 +930,10 @@ static noinline_for_stack bool submit_bio_checks(struct bio *bio)
 	case REQ_OP_DISCARD:
 		if (!blk_queue_discard(q))
 			goto not_supported;
+		break;
+	case REQ_OP_COPY:
+		if (unlikely(blk_check_copy(bio)))
+			goto end_io;
 		break;
 	case REQ_OP_SECURE_ERASE:
 		if (!blk_queue_secure_erase(q))

@@ -150,6 +150,226 @@ int blkdev_issue_discard(struct block_device *bdev, sector_t sector,
 }
 EXPORT_SYMBOL(blkdev_issue_discard);
 
+int blk_copy_offload(struct block_device *bdev, struct blk_copy_payload *payload,
+		sector_t dest, gfp_t gfp_mask)
+{
+	struct request_queue *q = bdev_get_queue(bdev);
+	struct bio *bio;
+	int ret, payload_size;
+
+	payload_size = struct_size(payload, range, payload->copy_nr_ranges);
+	bio = bio_map_kern(q, payload, payload_size, gfp_mask);
+	if (IS_ERR(bio))
+		return PTR_ERR(bio);
+
+	bio->bi_iter.bi_sector = dest;
+	bio->bi_opf = REQ_OP_COPY | REQ_NOMERGE;
+	bio_set_dev(bio, bdev);
+
+	ret = submit_bio_wait(bio);
+err:
+	bio_put(bio);
+	return ret;
+}
+
+int blk_read_to_buf(struct block_device *src_bdev, struct blk_copy_payload *payload,
+		gfp_t gfp_mask, sector_t copy_size, void **buf_p)
+{
+	struct request_queue *q = bdev_get_queue(src_bdev);
+	struct bio *bio, *parent = NULL;
+	void *buf = NULL;
+	int copy_len = copy_size << SECTOR_SHIFT;
+	int i, nr_srcs, ret, cur_size, t_len = 0;
+	bool is_vmalloc;
+
+	nr_srcs = payload->copy_nr_ranges;
+
+	buf = kvmalloc(copy_len, gfp_mask);
+	if (!buf)
+		return -ENOMEM;
+	is_vmalloc = is_vmalloc_addr(buf);
+
+	for (i = 0; i < nr_srcs; i++) {
+		cur_size = payload->range[i].len << SECTOR_SHIFT;
+
+		bio = bio_map_kern(q, buf + t_len, cur_size, gfp_mask);
+		if (IS_ERR(bio)) {
+			ret = PTR_ERR(bio);
+			goto out;
+		}
+
+		bio->bi_iter.bi_sector = payload->range[i].src;
+		bio->bi_opf = REQ_OP_READ;
+		bio_set_dev(bio, src_bdev);
+		bio->bi_end_io = NULL;
+		bio->bi_private = NULL;
+
+		if (parent) {
+			bio_chain(parent, bio);
+			submit_bio(parent);
+		}
+
+		parent = bio;
+		t_len += cur_size;
+	}
+
+	ret = submit_bio_wait(bio);
+	bio_put(bio);
+	if (is_vmalloc)
+		invalidate_kernel_vmap_range(buf, copy_len);
+	if (ret)
+		goto out;
+
+	*buf_p = buf;
+	return 0;
+out:
+	kvfree(buf);
+	return ret;
+}
+
+int blk_write_from_buf(struct block_device *dest_bdev, void *buf, sector_t dest,
+		sector_t copy_size, gfp_t gfp_mask)
+{
+	struct request_queue *q = bdev_get_queue(dest_bdev);
+	struct bio *bio;
+	int ret, copy_len = copy_size << SECTOR_SHIFT;
+
+	bio = bio_map_kern(q, buf, copy_len, gfp_mask);
+	if (IS_ERR(bio)) {
+		ret = PTR_ERR(bio);
+		goto out;
+	}
+	bio_set_dev(bio, dest_bdev);
+	bio->bi_opf = REQ_OP_WRITE;
+	bio->bi_iter.bi_sector = dest;
+
+	bio->bi_end_io = NULL;
+	ret = submit_bio_wait(bio);
+	bio_put(bio);
+out:
+	return ret;
+}
+
+int blk_prepare_payload(struct block_device *src_bdev, int nr_srcs, struct range_entry *rlist,
+		gfp_t gfp_mask, struct blk_copy_payload **payload_p, sector_t *copy_size)
+{
+
+	struct request_queue *q = bdev_get_queue(src_bdev);
+	struct blk_copy_payload *payload;
+	sector_t bs_mask, total_len = 0;
+	int i, ret, payload_size;
+
+	if (!q)
+		return -ENXIO;
+
+	if (!nr_srcs)
+		return -EINVAL;
+
+	if (bdev_read_only(src_bdev))
+		return -EPERM;
+
+	bs_mask = (bdev_logical_block_size(src_bdev) >> 9) - 1;
+
+	payload_size = struct_size(payload, range, nr_srcs);
+	payload = kmalloc(payload_size, gfp_mask);
+	if (!payload)
+		return -ENOMEM;
+
+	for (i = 0; i < nr_srcs; i++) {
+		if (rlist[i].src & bs_mask || rlist[i].len & bs_mask) {
+			ret = -EINVAL;
+			goto err;
+		}
+
+		payload->range[i].src = rlist[i].src;
+		payload->range[i].len = rlist[i].len;
+
+		total_len += rlist[i].len;
+	}
+
+	payload->copy_nr_ranges = i;
+	payload->src_bdev = src_bdev;
+	*copy_size = total_len;
+
+	*payload_p = payload;
+	return 0;
+err:
+	kfree(payload);
+	return ret;
+}
+
+int blk_copy_emulate(struct block_device *src_bdev, struct blk_copy_payload *payload,
+			struct block_device *dest_bdev, sector_t dest,
+			sector_t copy_size, gfp_t gfp_mask)
+{
+	void *buf = NULL;
+	int ret;
+
+	ret = blk_read_to_buf(src_bdev, payload, gfp_mask, copy_size, &buf);
+	if (ret)
+		goto out;
+
+	ret = blk_write_from_buf(dest_bdev, buf, dest, copy_size, gfp_mask);
+	if (buf)
+		kvfree(buf);
+out:
+	return ret;
+}
+
+/**
+ * blkdev_issue_copy - queue a copy
+ * @src_bdev:	source block device
+ * @nr_srcs:	number of source ranges to copy
+ * @rlist:	array of source ranges in sector
+ * @dest_bdev:	destination block device
+ * @dest:	destination in sector
+ * @gfp_mask:   memory allocation flags (for bio_alloc)
+ * @flags:	BLKDEV_COPY_* flags to control behaviour
+ *
+ * Description:
+ *	Copy array of source ranges from source block device to
+ *	destination block devcie. All source must belong to same bdev and
+ *	length of a source range cannot be zero.
+ */
+
+int blkdev_issue_copy(struct block_device *src_bdev, int nr_srcs,
+		struct range_entry *src_rlist, struct block_device *dest_bdev,
+		sector_t dest, gfp_t gfp_mask, int flags)
+{
+	struct request_queue *q = bdev_get_queue(src_bdev);
+	struct request_queue *dest_q = bdev_get_queue(dest_bdev);
+	struct blk_copy_payload *payload;
+	sector_t bs_mask, copy_size;
+	int ret;
+
+	ret = blk_prepare_payload(src_bdev, nr_srcs, src_rlist, gfp_mask,
+			&payload, &copy_size);
+	if (ret)
+		return ret;
+
+	bs_mask = (bdev_logical_block_size(dest_bdev) >> 9) - 1;
+	if (dest & bs_mask) {
+		return -EINVAL;
+		goto out;
+	}
+
+	if (q == dest_q && q->limits.copy_offload) {
+		ret = blk_copy_offload(src_bdev, payload, dest, gfp_mask);
+		if (ret)
+			goto out;
+	} else if (flags & BLKDEV_COPY_NOEMULATION) {
+		ret = -EIO;
+		goto out;
+	} else
+		ret = blk_copy_emulate(src_bdev, payload, dest_bdev, dest,
+				copy_size, gfp_mask);
+
+out:
+	kvfree(payload);
+	return ret;
+}
+EXPORT_SYMBOL(blkdev_issue_copy);
+
 /**
  * __blkdev_issue_write_same - generate number of bios with same page
  * @bdev:	target blockdev

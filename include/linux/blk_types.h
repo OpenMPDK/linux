@@ -353,6 +353,8 @@ enum req_opf {
 	REQ_OP_ZONE_RESET	= 15,
 	/* reset all the zone present on the device */
 	REQ_OP_ZONE_RESET_ALL	= 17,
+	/* copy ranges within device */
+	REQ_OP_COPY		= 19,
 
 	/* SCSI passthrough using struct scsi_request */
 	REQ_OP_SCSI_IN		= 32,
@@ -479,6 +481,11 @@ static inline bool op_is_discard(unsigned int op)
 	return (op & REQ_OP_MASK) == REQ_OP_DISCARD;
 }
 
+static inline bool op_is_copy(unsigned int op)
+{
+	return (op & REQ_OP_MASK) == REQ_OP_COPY;
+}
+
 /*
  * Check if a bio or request operation is a zone management operation, with
  * the exception of REQ_OP_ZONE_RESET_ALL which is treated as a special case
@@ -536,6 +543,13 @@ struct blk_rq_stat {
 	u64 max;
 	u32 nr_samples;
 	u64 batch;
+};
+
+struct blk_copy_payload {
+	sector_t	dest;
+	int		copy_nr_ranges;
+	struct block_device *src_bdev;
+	struct	range_entry	range[];
 };
 
 #endif /* __LINUX_BLK_TYPES_H */
