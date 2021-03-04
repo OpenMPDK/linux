@@ -977,6 +977,13 @@ static const struct io_op_def io_op_defs[] = {
 	},
 	[IORING_OP_RENAMEAT] = {},
 	[IORING_OP_UNLINKAT] = {},
+	[IORING_OP_COPY] = {
+		.needs_file		= 1,
+		.unbound_nonreg_file	= 1,
+		.pollout		= 1,
+		.plug			= 1,
+		.async_size		= sizeof(struct io_async_rw),
+	},
 };
 
 static void io_uring_try_cancel_requests(struct io_ring_ctx *ctx,
@@ -2397,6 +2404,7 @@ static bool io_resubmit_prep(struct io_kiocb *req)
 	case IORING_OP_WRITEV:
 	case IORING_OP_WRITE_FIXED:
 	case IORING_OP_WRITE:
+	case IORING_OP_COPY:
 		rw = WRITE;
 		break;
 	default:
@@ -2946,7 +2954,7 @@ static int io_import_iovec(int rw, struct io_kiocb *req, struct iovec **iovec,
 	if (req->buf_index && !(req->flags & REQ_F_BUFFER_SELECT))
 		return -EINVAL;
 
-	if (opcode == IORING_OP_READ || opcode == IORING_OP_WRITE) {
+	if (opcode == IORING_OP_READ || opcode == IORING_OP_WRITE || opcode == IORING_OP_COPY) {
 		if (req->flags & REQ_F_BUFFER_SELECT) {
 			buf = io_rw_buffer_select(req, &sqe_len, needs_lock);
 			if (IS_ERR(buf))
@@ -3357,12 +3365,16 @@ static int io_write(struct io_kiocb *req, unsigned int issue_flags)
 	}
 	kiocb->ki_flags |= IOCB_WRITE;
 
-	if (req->file->f_op->write_iter)
-		ret2 = call_write_iter(req->file, kiocb, iter);
-	else if (req->file->f_op->write)
-		ret2 = loop_rw_iter(WRITE, req, iter);
-	else
-		ret2 = -EINVAL;
+	if (unlikely(req->opcode == IORING_OP_COPY))
+		ret2 = blkdev_copy_iter(kiocb, iter);
+	else {
+		if (req->file->f_op->write_iter)
+			ret2 = call_write_iter(req->file, kiocb, iter);
+		else if (req->file->f_op->write)
+			ret2 = loop_rw_iter(WRITE, req, iter);
+		else
+			ret2 = -EINVAL;
+	}
 
 	/*
 	 * Raw bdev writes will return -EOPNOTSUPP for IOCB_NOWAIT. Just
@@ -5696,6 +5708,7 @@ static int io_req_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
 	case IORING_OP_WRITEV:
 	case IORING_OP_WRITE_FIXED:
 	case IORING_OP_WRITE:
+	case IORING_OP_COPY:
 		return io_write_prep(req, sqe);
 	case IORING_OP_POLL_ADD:
 		return io_poll_add_prep(req, sqe);
@@ -5772,6 +5785,7 @@ static int io_req_prep_async(struct io_kiocb *req)
 	case IORING_OP_WRITEV:
 	case IORING_OP_WRITE_FIXED:
 	case IORING_OP_WRITE:
+	case IORING_OP_COPY:
 		return io_rw_prep_async(req, WRITE);
 	case IORING_OP_SENDMSG:
 	case IORING_OP_SEND:
@@ -5875,7 +5889,8 @@ static void __io_clean_op(struct io_kiocb *req)
 		case IORING_OP_READ:
 		case IORING_OP_WRITEV:
 		case IORING_OP_WRITE_FIXED:
-		case IORING_OP_WRITE: {
+		case IORING_OP_WRITE:
+		case IORING_OP_COPY: {
 			struct io_async_rw *io = req->async_data;
 			if (io->free_iovec)
 				kfree(io->free_iovec);
@@ -5941,6 +5956,7 @@ static int io_issue_sqe(struct io_kiocb *req, unsigned int issue_flags)
 	case IORING_OP_WRITEV:
 	case IORING_OP_WRITE_FIXED:
 	case IORING_OP_WRITE:
+	case IORING_OP_COPY:
 		ret = io_write(req, issue_flags);
 		break;
 	case IORING_OP_FSYNC:
