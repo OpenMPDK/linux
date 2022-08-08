@@ -472,6 +472,16 @@ const struct io_op_def io_op_defs[] = {
 		.issue			= io_uring_cmd,
 		.prep_async		= io_uring_cmd_prep_async,
 	},
+	[IORING_OP_URING_CMD_FIXED] = {
+		.needs_file		= 1,
+		.plug			= 1,
+		.name			= "URING_CMD_FIXED",
+		.iopoll			= 1,
+		.async_size		= uring_cmd_pdu_size(1),
+		.prep			= io_uring_cmd_prep,
+		.issue			= io_uring_cmd,
+		.prep_async		= io_uring_cmd_prep_async,
+	},
 	[IORING_OP_SENDZC_NOTIF] = {
 		.name			= "SENDZC_NOTIF",
 		.needs_file		= 1,

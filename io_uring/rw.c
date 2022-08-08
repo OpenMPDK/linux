@@ -1005,7 +1005,8 @@ int io_do_iopoll(struct io_ring_ctx *ctx, bool force_nonspin)
 		if (READ_ONCE(req->iopoll_completed))
 			break;
 
-		if (req->opcode == IORING_OP_URING_CMD) {
+		if (req->opcode == IORING_OP_URING_CMD ||
+				req->opcode == IORING_OP_URING_CMD_FIXED) {
 			struct io_uring_cmd *ioucmd = (struct io_uring_cmd *)rw;
 
 			ret = req->file->f_op->uring_cmd_iopoll(ioucmd);
