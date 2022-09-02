@@ -385,25 +385,36 @@ static void nvme_uring_task_cb(struct io_uring_cmd *ioucmd)
 	io_uring_cmd_done(ioucmd, status, result);
 }
 
-static void nvme_uring_cmd_end_io(struct request *req, blk_status_t err)
+static void nvme_uring_iopoll_cmd_end_io(struct request *req, blk_status_t err)
 {
 	struct io_uring_cmd *ioucmd = req->end_io_data;
 	struct nvme_uring_cmd_pdu *pdu = nvme_uring_cmd_pdu(ioucmd);
 	/* extract bio before reusing the same field for request */
 	struct bio *bio = pdu->bio;
-	void *cookie = READ_ONCE(ioucmd->cookie);
 
 	pdu->req = req;
 	req->bio = bio;
 
 	/*
 	 * For iopoll, complete it directly.
-	 * Otherwise, move the completion to task work.
 	 */
-	if (cookie != NULL && blk_rq_is_poll(req))
-		nvme_uring_task_cb(ioucmd);
-	else
-		io_uring_cmd_complete_in_task(ioucmd, nvme_uring_task_cb);
+	nvme_uring_task_cb(ioucmd);
+}
+
+static void nvme_uring_cmd_end_io(struct request *req, blk_status_t err)
+{
+	struct io_uring_cmd *ioucmd = req->end_io_data;
+	struct nvme_uring_cmd_pdu *pdu = nvme_uring_cmd_pdu(ioucmd);
+	/* extract bio before reusing the same field for request */
+	struct bio *bio = pdu->bio;
+
+	pdu->req = req;
+	req->bio = bio;
+
+	/*
+	 * Move the completion to task work.
+	 */
+	io_uring_cmd_complete_in_task(ioucmd, nvme_uring_task_cb);
 }
 
 static int nvme_uring_cmd_io(struct nvme_ctrl *ctrl, struct nvme_ns *ns,
@@ -464,7 +475,10 @@ retry:
 			blk_flags);
 	if (IS_ERR(req))
 		return PTR_ERR(req);
-	req->end_io = nvme_uring_cmd_end_io;
+	if (issue_flags & IO_URING_F_IOPOLL)
+		req->end_io = nvme_uring_iopoll_cmd_end_io;
+	else
+		req->end_io = nvme_uring_cmd_end_io;
 	req->end_io_data = ioucmd;
 
 	if (issue_flags & IO_URING_F_IOPOLL && rq_flags & REQ_POLLED) {
@@ -623,7 +637,9 @@ int nvme_ns_chr_uring_cmd(struct io_uring_cmd *ioucmd, unsigned int issue_flags)
 	return nvme_ns_uring_cmd(ns, ioucmd, issue_flags);
 }
 
-int nvme_ns_chr_uring_cmd_iopoll(struct io_uring_cmd *ioucmd)
+int nvme_ns_chr_uring_cmd_iopoll(struct io_uring_cmd *ioucmd,
+				 struct io_comp_batch *iob,
+				 unsigned int poll_flags)
 {
 	struct bio *bio;
 	int ret = 0;
@@ -636,7 +652,7 @@ int nvme_ns_chr_uring_cmd_iopoll(struct io_uring_cmd *ioucmd)
 			struct nvme_ns, cdev);
 	q = ns->queue;
 	if (test_bit(QUEUE_FLAG_POLL, &q->queue_flags) && bio && bio->bi_bdev)
-		ret = bio_poll(bio, NULL, 0);
+		ret = bio_poll(bio, iob, poll_flags);
 	rcu_read_unlock();
 	return ret;
 }
@@ -722,7 +738,9 @@ int nvme_ns_head_chr_uring_cmd(struct io_uring_cmd *ioucmd,
 	return ret;
 }
 
-int nvme_ns_head_chr_uring_cmd_iopoll(struct io_uring_cmd *ioucmd)
+int nvme_ns_head_chr_uring_cmd_iopoll(struct io_uring_cmd *ioucmd,
+				      struct io_comp_batch *iob,
+				      unsigned int poll_flags)
 {
 	struct cdev *cdev = file_inode(ioucmd->file)->i_cdev;
 	struct nvme_ns_head *head = container_of(cdev, struct nvme_ns_head, cdev);
@@ -738,7 +756,7 @@ int nvme_ns_head_chr_uring_cmd_iopoll(struct io_uring_cmd *ioucmd)
 		q = ns->queue;
 		if (test_bit(QUEUE_FLAG_POLL, &q->queue_flags) && bio
 				&& bio->bi_bdev)
-			ret = bio_poll(bio, NULL, 0);
+			ret = bio_poll(bio, iob, poll_flags);
 		rcu_read_unlock();
 	}
 	srcu_read_unlock(&head->srcu, srcu_idx);
