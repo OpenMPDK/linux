@@ -1161,9 +1161,8 @@ static void __cold io_move_task_work_from_local(struct io_ring_ctx *ctx)
 	}
 }
 
-int io_run_local_work(struct io_ring_ctx *ctx)
+int __io_run_local_work(struct io_ring_ctx *ctx, bool locked)
 {
-	bool locked;
 	struct llist_node *node;
 	struct llist_node fake;
 	struct llist_node *current_final = NULL;
@@ -1177,8 +1176,6 @@ int io_run_local_work(struct io_ring_ctx *ctx)
 
 		return -EEXIST;
 	}
-
-	locked = mutex_trylock(&ctx->uring_lock);
 
 	node = io_llist_xchg(&ctx->work_llist, &fake);
 	ret = 0;
@@ -1204,11 +1201,23 @@ again:
 		goto again;
 	}
 
-	if (locked) {
+	if (locked)
 		io_submit_flush_completions(ctx);
-		mutex_unlock(&ctx->uring_lock);
-	}
 	trace_io_uring_local_work_run(ctx, ret, loops);
+	return ret;
+
+}
+
+int io_run_local_work(struct io_ring_ctx *ctx)
+{
+	bool locked;
+	int ret;
+
+	locked = mutex_trylock(&ctx->uring_lock);
+	ret = __io_run_local_work(ctx, locked);
+	if (locked)
+		mutex_unlock(&ctx->uring_lock);
+
 	return ret;
 }
 
@@ -1419,25 +1428,26 @@ static int io_iopoll_check(struct io_ring_ctx *ctx, long min)
 		 * forever, while the workqueue is stuck trying to acquire the
 		 * very same mutex.
 		 */
-		if (wq_list_empty(&ctx->iopoll_list)) {
-			u32 tail = ctx->cached_cq_tail;
+		if (wq_list_empty(&ctx->iopoll_list) ||
+		    io_task_work_pending(ctx)) {
+			if (!llist_empty(&ctx->work_llist))
+				__io_run_local_work(ctx, true);
+			if (task_work_pending(current) ||
+			    wq_list_empty(&ctx->iopoll_list)) {
+				u32 tail = ctx->cached_cq_tail;
 
-			mutex_unlock(&ctx->uring_lock);
-			ret = io_run_task_work_ctx(ctx);
-			mutex_lock(&ctx->uring_lock);
-			if (ret < 0)
-				break;
+				mutex_unlock(&ctx->uring_lock);
+				ret = io_run_task_work();
+				mutex_lock(&ctx->uring_lock);
 
-			/* some requests don't go through iopoll_list */
-			if (tail != ctx->cached_cq_tail ||
-			    wq_list_empty(&ctx->iopoll_list))
-				break;
-		}
+				if (ret < 0)
+					break;
 
-		if (task_work_pending(current)) {
-			mutex_unlock(&ctx->uring_lock);
-			io_run_task_work();
-			mutex_lock(&ctx->uring_lock);
+				/* some requests don't go through iopoll_list */
+				if (tail != ctx->cached_cq_tail ||
+				    wq_list_empty(&ctx->iopoll_list))
+					break;
+			}
 		}
 		ret = io_do_iopoll(ctx, !min);
 		if (ret < 0)

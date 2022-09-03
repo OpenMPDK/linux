@@ -27,6 +27,7 @@ enum {
 struct io_uring_cqe *__io_get_cqe(struct io_ring_ctx *ctx);
 bool io_req_cqe_overflow(struct io_kiocb *req);
 int io_run_task_work_sig(struct io_ring_ctx *ctx);
+int __io_run_local_work(struct io_ring_ctx *ctx, bool locked);
 int io_run_local_work(struct io_ring_ctx *ctx);
 void io_req_complete_failed(struct io_kiocb *req, s32 res);
 void __io_req_complete(struct io_kiocb *req, unsigned issue_flags);
@@ -233,6 +234,12 @@ static inline int io_run_task_work(void)
 	}
 
 	return 0;
+}
+
+static inline bool io_task_work_pending(struct io_ring_ctx *ctx)
+{
+	return test_thread_flag(TIF_NOTIFY_SIGNAL) ||
+		!wq_list_empty(&ctx->work_llist);
 }
 
 static inline int io_run_task_work_ctx(struct io_ring_ctx *ctx)
