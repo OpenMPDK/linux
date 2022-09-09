@@ -20,6 +20,42 @@ static void __user *nvme_to_user_ptr(uintptr_t ptrval)
 	return (void __user *)ptrval;
 }
 
+bool nvme_io_cmd_allowed(u8 opcode, fmode_t mode)
+{
+	/* allow write/read based on what was allowed for open */
+	/* TBD: try to use nvme_is_write() here */
+	if (opcode & 1)
+		return (mode & FMODE_WRITE);
+	else
+		return (mode & FMODE_READ);
+}
+
+bool nvme_admin_cmd_allowed(u8 opcode, fmode_t mode)
+{
+	/* allowed few read-only commands post the mode check */
+	switch (opcode) {
+	case nvme_admin_identify:
+	case nvme_admin_get_log_page:
+	case nvme_admin_get_features:
+		return (mode & FMODE_READ);
+	default:
+		return false;
+	}
+}
+
+bool nvme_cmd_allowed(struct nvme_ns *ns, u8 opcode, fmode_t mode)
+{
+	bool ret;
+	/* root can do anything */
+	if (capable(CAP_SYS_ADMIN))
+		return true;
+	if (ns == NULL)
+		ret = nvme_admin_cmd_allowed(opcode, mode);
+	else
+		ret = nvme_io_cmd_allowed(opcode, mode);
+	return ret;
+}
+
 static void *nvme_add_user_metadata(struct bio *bio, void __user *ubuf,
 		unsigned len, u32 seed, bool write)
 {
