@@ -402,7 +402,7 @@ static void rzg2l_csi2_mipi_link_disable(struct rzg2l_csi2 *csi2)
 	rzg2l_csi2_write(csi2, CSI2nRTCT, CSI2nRTCT_VSRST);
 
 	/* Make sure CSI2nRTST.VSRSTS bit is cleared */
-	while (timeout--) {
+	while (--timeout) {
 		if (!(rzg2l_csi2_read(csi2, CSI2nRTST) & CSI2nRTST_VSRSTS))
 			break;
 		usleep_range(100, 200);
@@ -431,8 +431,6 @@ static int rzg2l_csi2_s_stream(struct v4l2_subdev *sd, int enable)
 	int ret;
 
 	if (enable) {
-		int ret;
-
 		ret = pm_runtime_resume_and_get(csi2->dev);
 		if (ret)
 			return ret;

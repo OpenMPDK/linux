@@ -221,7 +221,9 @@ void ftrace_replace_code(int enable)
 
 		ret = ftrace_verify_code(rec->ip, old);
 		if (ret) {
+			ftrace_expected = old;
 			ftrace_bug(ret, rec);
+			ftrace_expected = NULL;
 			return;
 		}
 	}
@@ -422,7 +424,6 @@ create_trampoline(struct ftrace_ops *ops, unsigned int *tramp_size)
 	ops->flags |= FTRACE_OPS_FL_ALLOC_TRAMP;
 
 	set_memory_rox((unsigned long)trampoline, npages);
-
 	return (unsigned long)trampoline;
 fail:
 	tramp_free(trampoline);

@@ -143,20 +143,20 @@ iommufd_ioas serves as the metadata datastructure to manage how IOVA ranges are
 mapped to memory pages, composed of:
 
 - struct io_pagetable holding the IOVA map
-- struct iopt_areas representing populated portions of IOVA
+- struct iopt_area's representing populated portions of IOVA
 - struct iopt_pages representing the storage of PFNs
 - struct iommu_domain representing the IO page table in the IOMMU
 - struct iopt_pages_access representing in-kernel users of PFNs
 - struct xarray pinned_pfns holding a list of pages pinned by in-kernel users
 
 Each iopt_pages represents a logical linear array of full PFNs. The PFNs are
-ultimately derived from userspave VAs via an mm_struct. Once they have been
-pinned the PFNs are stored in IOPTEs of an iommu_domain or inside the pinned_pages
+ultimately derived from userspace VAs via an mm_struct. Once they have been
+pinned the PFNs are stored in IOPTEs of an iommu_domain or inside the pinned_pfns
 xarray if they have been pinned through an iommufd_access.
 
 PFN have to be copied between all combinations of storage locations, depending
 on what domains are present and what kinds of in-kernel "software access" users
-exists. The mechanism ensures that a page is pinned only once.
+exist. The mechanism ensures that a page is pinned only once.
 
 An io_pagetable is composed of iopt_areas pointing at iopt_pages, along with a
 list of iommu_domains that mirror the IOVA to PFN map.

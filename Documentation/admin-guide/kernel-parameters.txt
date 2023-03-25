@@ -892,10 +892,8 @@
 			handling. When switched on, additional debug data is
 			printed to the console in case a hanging CPU is
 			detected, and that CPU is pinged again in order to try
-			to resolve the hang situation.  The default value of
-			this option depends on the CSD_LOCK_WAIT_DEBUG_DEFAULT
-			Kconfig option.
-			0: disable csdlock debugging
+			to resolve the hang situation.
+			0: disable csdlock debugging (default)
 			1: enable basic csdlock debugging (minor impact)
 			ext: enable extended csdlock debugging (more impact,
 			     but more data)
@@ -1051,6 +1049,11 @@
 			Limits the number of kernel SLB entries, and flushes
 			them frequently to increase the rate of SLB faults
 			on kernel addresses.
+
+	stress_hpt	[PPC]
+			Limits the number of kernel HPT entries in the hash
+			page table to increase the rate of hash page table
+			faults on kernel addresses.
 
 	disable=	[IPV6]
 			See Documentation/networking/ipv6.rst.
@@ -5109,12 +5112,6 @@
 			Setting this to zero causes the value from
 			rcupdate.rcu_cpu_stall_timeout to be used (after
 			conversion from seconds to milliseconds).
-
-	rcupdate.rcu_cpu_stall_cputime= [KNL]
-			Provide statistics on the cputime and count of
-			interrupts and tasks during the sampling period. For
-			multiple continuous RCU stalls, all sampling periods
-			begin at half of the first RCU stall timeout.
 
 	rcupdate.rcu_expedited= [KNL]
 			Use expedited grace-period primitives, for

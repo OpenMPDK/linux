@@ -322,8 +322,9 @@ void trace_event_printf(struct trace_iterator *iter, const char *fmt, ...)
 }
 EXPORT_SYMBOL(trace_event_printf);
 
-static int trace_output_raw(struct trace_iterator *iter, char *name,
-			    char *fmt, va_list ap)
+static __printf(3, 0)
+int trace_output_raw(struct trace_iterator *iter, char *name,
+		     char *fmt, va_list ap)
 {
 	struct trace_seq *s = &iter->seq;
 
@@ -1534,7 +1535,7 @@ static struct trace_event *events[] __initdata = {
 	NULL
 };
 
-__init static int init_events(void)
+__init int init_events(void)
 {
 	struct trace_event *event;
 	int i, ret;
@@ -1547,4 +1548,3 @@ __init static int init_events(void)
 
 	return 0;
 }
-early_initcall(init_events);

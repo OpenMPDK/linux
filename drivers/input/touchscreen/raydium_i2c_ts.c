@@ -210,12 +210,14 @@ static int raydium_i2c_send(struct i2c_client *client,
 
 		error = raydium_i2c_xfer(client, addr, xfer, ARRAY_SIZE(xfer));
 		if (likely(!error))
-			return 0;
+			goto out;
 
 		msleep(RM_RETRY_DELAY_MS);
 	} while (++tries < RM_MAX_RETRIES);
 
 	dev_err(&client->dev, "%s failed: %d\n", __func__, error);
+out:
+	kfree(tx_buf);
 	return error;
 }
 
@@ -1063,8 +1065,7 @@ static void raydium_i2c_power_off(void *_data)
 	}
 }
 
-static int raydium_i2c_probe(struct i2c_client *client,
-			     const struct i2c_device_id *id)
+static int raydium_i2c_probe(struct i2c_client *client)
 {
 	union i2c_smbus_data dummy;
 	struct raydium_data *ts;
@@ -1272,7 +1273,7 @@ MODULE_DEVICE_TABLE(of, raydium_of_match);
 #endif
 
 static struct i2c_driver raydium_i2c_driver = {
-	.probe = raydium_i2c_probe,
+	.probe_new = raydium_i2c_probe,
 	.id_table = raydium_i2c_id,
 	.driver = {
 		.name = "raydium_ts",

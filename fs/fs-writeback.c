@@ -1298,6 +1298,11 @@ static void redirty_tail_locked(struct inode *inode, struct bdi_writeback *wb)
 	assert_spin_locked(&inode->i_lock);
 
 	inode->i_state &= ~I_SYNC_QUEUED;
+	/*
+	 * When the inode is being freed just don't bother with dirty list
+	 * tracking. Flush worker will ignore this inode anyway and it will
+	 * trigger assertions in inode_io_list_move_locked().
+	 */
 	if (inode->i_state & I_FREEING) {
 		list_del_init(&inode->i_io_list);
 		wb_io_lists_depopulated(wb);
@@ -1352,8 +1357,6 @@ static bool inode_dirtied_after(struct inode *inode, unsigned long t)
 #endif
 	return ret;
 }
-
-#define EXPIRE_DIRTY_ATIME 0x0001
 
 /*
  * Move expired (dirtied before dirtied_before) dirty inodes from

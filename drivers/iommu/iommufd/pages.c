@@ -289,6 +289,10 @@ static void batch_clear_carry(struct pfn_batch *batch, unsigned int keep_pfns)
 	if (!keep_pfns)
 		return batch_clear(batch);
 
+	if (IS_ENABLED(CONFIG_IOMMUFD_TEST))
+		WARN_ON(!batch->end ||
+			batch->npfns[batch->end - 1] < keep_pfns);
+
 	batch->total_pfns = keep_pfns;
 	batch->npfns[0] = keep_pfns;
 	batch->pfns[0] = batch->pfns[batch->end - 1] +
@@ -342,7 +346,7 @@ static void batch_destroy(struct pfn_batch *batch, void *backup)
 		kfree(batch->pfns);
 }
 
-/* true if the pfn could be added, false otherwise */
+/* true if the pfn was added, false otherwise */
 static bool batch_add_pfn(struct pfn_batch *batch, unsigned long pfn)
 {
 	const unsigned int MAX_NPFNS = type_max(typeof(*batch->npfns));
@@ -418,7 +422,7 @@ static struct page **raw_pages_from_domain(struct iommu_domain *domain,
 	return out_pages;
 }
 
-/* Continues reading a domain until we reach a discontiguity in the pfns. */
+/* Continues reading a domain until we reach a discontinuity in the pfns. */
 static void batch_from_domain_continue(struct pfn_batch *batch,
 				       struct iommu_domain *domain,
 				       struct iopt_area *area,
@@ -707,12 +711,9 @@ static void pfn_reader_user_init(struct pfn_reader_user *user,
 	user->upages_end = 0;
 	user->locked = -1;
 
-	if (pages->writable) {
-		user->gup_flags = FOLL_LONGTERM | FOLL_WRITE;
-	} else {
-		/* Still need to break COWs on read */
-		user->gup_flags = FOLL_LONGTERM | FOLL_FORCE | FOLL_WRITE;
-	}
+	user->gup_flags = FOLL_LONGTERM;
+	if (pages->writable)
+		user->gup_flags |= FOLL_WRITE;
 }
 
 static void pfn_reader_user_destroy(struct pfn_reader_user *user,
@@ -723,7 +724,7 @@ static void pfn_reader_user_destroy(struct pfn_reader_user *user,
 			mmap_read_unlock(pages->source_mm);
 		if (pages->source_mm != current->mm)
 			mmput(pages->source_mm);
-		user->locked = 0;
+		user->locked = -1;
 	}
 
 	kfree(user->upages);
@@ -782,13 +783,9 @@ static int pfn_reader_user_pin(struct pfn_reader_user *user,
 			mmap_read_lock(pages->source_mm);
 			user->locked = 1;
 		}
-		/*
-		 * FIXME: last NULL can be &pfns->locked once the GUP patch
-		 * is merged.
-		 */
 		rc = pin_user_pages_remote(pages->source_mm, uptr, npages,
 					   user->gup_flags, user->upages, NULL,
-					   NULL);
+					   &user->locked);
 	}
 	if (rc <= 0) {
 		if (WARN_ON(!rc))
@@ -810,7 +807,6 @@ static int incr_user_locked_vm(struct iopt_pages *pages, unsigned long npages)
 
 	lock_limit = task_rlimit(pages->source_task, RLIMIT_MEMLOCK) >>
 		     PAGE_SHIFT;
-	npages = pages->npinned - pages->last_npinned;
 	do {
 		cur_pages = atomic_long_read(&pages->source_user->locked_vm);
 		new_pages = cur_pages + npages;

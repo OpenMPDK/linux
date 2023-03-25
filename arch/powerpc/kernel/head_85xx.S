@@ -231,7 +231,7 @@ set_ivor:
 	lis	r1,init_thread_union@h
 	ori	r1,r1,init_thread_union@l
 	li	r0,0
-	stwu	r0,THREAD_SIZE-STACK_FRAME_OVERHEAD(r1)
+	stwu	r0,THREAD_SIZE-STACK_FRAME_MIN_SIZE(r1)
 
 #ifdef CONFIG_SMP
 	stw	r24, TASK_CPU(r2)
@@ -864,7 +864,7 @@ _GLOBAL(load_up_spe)
  * SPE unavailable trap from kernel - print a message, but let
  * the task use SPE in the kernel until it returns to user mode.
  */
-KernelSPE:
+SYM_FUNC_START_LOCAL(KernelSPE)
 	lwz	r3,_MSR(r1)
 	oris	r3,r3,MSR_SPE@h
 	stw	r3,_MSR(r1)	/* enable use of SPE after return */
@@ -881,6 +881,7 @@ KernelSPE:
 #endif
 	.align	4,0
 
+SYM_FUNC_END(KernelSPE)
 #endif /* CONFIG_SPE */
 
 /*
@@ -975,10 +976,10 @@ _GLOBAL(__giveup_spe)
 	li	r4,THREAD_ACC
 	evstddx	evr6, r4, r3		/* save off accumulator */
 	beq	1f
-	lwz	r4,_MSR-STACK_FRAME_OVERHEAD(r5)
+	lwz	r4,_MSR-STACK_INT_FRAME_REGS(r5)
 	lis	r3,MSR_SPE@h
 	andc	r4,r4,r3		/* disable SPE for previous task */
-	stw	r4,_MSR-STACK_FRAME_OVERHEAD(r5)
+	stw	r4,_MSR-STACK_INT_FRAME_REGS(r5)
 1:
 	blr
 #endif /* CONFIG_SPE */
@@ -1047,7 +1048,7 @@ __secondary_start:
 	lwz	r1,TASK_STACK(r2)
 
 	/* stack */
-	addi	r1,r1,THREAD_SIZE-STACK_FRAME_OVERHEAD
+	addi	r1,r1,THREAD_SIZE-STACK_FRAME_MIN_SIZE
 	li	r0,0
 	stw	r0,0(r1)
 

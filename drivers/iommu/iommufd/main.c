@@ -227,6 +227,9 @@ static int iommufd_option(struct iommufd_ucmd *ucmd)
 	struct iommu_option *cmd = ucmd->cmd;
 	int rc;
 
+	if (cmd->__reserved)
+		return -EOPNOTSUPP;
+
 	switch (cmd->option_id) {
 	case IOMMU_OPTION_RLIMIT_MODE:
 		rc = iommufd_option_rlimit_mode(cmd, ucmd->ictx);

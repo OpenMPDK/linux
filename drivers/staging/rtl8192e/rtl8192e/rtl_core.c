@@ -830,14 +830,12 @@ static void _rtl92e_init_priv_variable(struct net_device *dev)
 	struct r8192_priv *priv = rtllib_priv(dev);
 	u8 i;
 
-	priv->AcmMethod = eAcmWay2_SW;
 	priv->dot11_current_preamble_mode = PREAMBLE_AUTO;
 	priv->rtllib->status = 0;
 	priv->polling_timer_on = 0;
 	priv->up_first_time = 1;
 	priv->blinked_ingpio = false;
 	priv->being_init_adapter = false;
-	priv->initialized_at_probe = false;
 	priv->bdisable_nic = false;
 	priv->bfirst_init = false;
 	priv->txringcount = 64;
@@ -868,8 +866,6 @@ static void _rtl92e_init_priv_variable(struct net_device *dev)
 	priv->rst_progress = RESET_TYPE_NORESET;
 	priv->force_reset = false;
 	memset(priv->rtllib->swcamtable, 0, sizeof(struct sw_cam_table) * 32);
-
-	memset(&priv->int_log, 0, sizeof(struct log_int_8190));
 	priv->rx_ctr = 0;
 	priv->rtllib->wx_set_enc = 0;
 	priv->hw_radio_off = false;
@@ -904,8 +900,6 @@ static void _rtl92e_init_priv_variable(struct net_device *dev)
 
 	for (i = 0; i < MAX_QUEUE_SIZE; i++)
 		skb_queue_head_init(&priv->rtllib->skb_waitQ[i]);
-	for (i = 0; i < MAX_QUEUE_SIZE; i++)
-		skb_queue_head_init(&priv->rtllib->skb_aggQ[i]);
 }
 
 static void _rtl92e_init_priv_lock(struct r8192_priv *priv)
@@ -2189,7 +2183,6 @@ static irqreturn_t _rtl92e_irq(int irq, void *netdev)
 
 	if (inta & IMR_ROK) {
 		priv->stats.rxint++;
-		priv->int_log.nIMR_ROK++;
 		tasklet_schedule(&priv->irq_rx_tasklet);
 	}
 

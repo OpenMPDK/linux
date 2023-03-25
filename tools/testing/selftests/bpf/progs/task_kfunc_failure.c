@@ -73,7 +73,7 @@ int BPF_PROG(task_kfunc_acquire_trusted_walked, struct task_struct *task, u64 cl
 	struct task_struct *acquired;
 
 	/* Can't invoke bpf_task_acquire() on a trusted pointer obtained from walking a struct. */
-	acquired = bpf_task_acquire(task->last_wakee);
+	acquired = bpf_task_acquire(task->group_leader);
 	bpf_task_release(acquired);
 
 	return 0;
@@ -269,5 +269,16 @@ int BPF_PROG(task_kfunc_from_pid_no_null_check, struct task_struct *task, u64 cl
 	/* Releasing bpf_task_from_pid() lookup without a NULL check. */
 	bpf_task_release(acquired);
 
+	return 0;
+}
+
+SEC("lsm/task_free")
+int BPF_PROG(task_kfunc_from_lsm_task_free, struct task_struct *task)
+{
+	struct task_struct *acquired;
+
+	/* the argument of lsm task_free hook is untrusted. */
+	acquired = bpf_task_acquire(task);
+	bpf_task_release(acquired);
 	return 0;
 }

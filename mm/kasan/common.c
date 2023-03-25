@@ -95,24 +95,19 @@ asmlinkage void kasan_unpoison_task_stack_below(const void *watermark)
 }
 #endif /* CONFIG_KASAN_STACK */
 
-bool __kasan_unpoison_pages(struct page *page, unsigned int order, bool init)
+void __kasan_unpoison_pages(struct page *page, unsigned int order, bool init)
 {
 	u8 tag;
 	unsigned long i;
 
 	if (unlikely(PageHighMem(page)))
-		return false;
-
-	if (!kasan_sample_page_alloc())
-		return false;
+		return;
 
 	tag = kasan_random_tag();
 	kasan_unpoison(set_tag(page_address(page), tag),
 		       PAGE_SIZE << order, init);
 	for (i = 0; i < (1 << order); i++)
 		page_kasan_tag_set(page + i, tag);
-
-	return true;
 }
 
 void __kasan_poison_pages(struct page *page, unsigned int order, bool init)
@@ -251,6 +246,9 @@ bool __kasan_slab_free(struct kmem_cache *cache, void *object,
 
 static inline bool ____kasan_kfree_large(void *ptr, unsigned long ip)
 {
+	if (!kasan_arch_is_ready())
+		return false;
+
 	if (ptr != page_address(virt_to_head_page(ptr))) {
 		kasan_report_invalid_free(ptr, ip, KASAN_REPORT_INVALID_FREE);
 		return true;

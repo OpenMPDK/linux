@@ -130,6 +130,7 @@ struct ov9282_reg_list {
  * @vblank_min: Minimum vertical blanking in lines
  * @vblank_max: Maximum vertical blanking in lines
  * @link_freq_idx: Link frequency index
+ * @crop: on-sensor cropping for this mode
  * @reg_list: Register list for sensor mode
  */
 struct ov9282_mode {
@@ -152,13 +153,16 @@ struct ov9282_mode {
  * @pad: Media pad. Only one pad supported
  * @reset_gpio: Sensor reset gpio
  * @inclk: Sensor input clock
+ * @supplies: Regulator supplies for the sensor
  * @ctrl_handler: V4L2 control handler
  * @link_freq_ctrl: Pointer to link frequency control
  * @hblank_ctrl: Pointer to horizontal blanking control
  * @vblank_ctrl: Pointer to vertical blanking control
  * @exp_ctrl: Pointer to exposure control
  * @again_ctrl: Pointer to analog gain control
+ * @pixel_rate: Pointer to pixel rate control
  * @vblank: Vertical blanking in lines
+ * @noncontinuous_clock: Selection of CSI2 noncontinuous clock mode
  * @cur_mode: Pointer to current selected sensor mode
  * @code: Mbus code currently selected
  * @mutex: Mutex for serializing sensor controls
@@ -264,7 +268,7 @@ static const struct ov9282_reg common_regs[] = {
 	{0x5a08, 0x84},
 };
 
-struct ov9282_reg_list common_regs_list = {
+static struct ov9282_reg_list common_regs_list = {
 	.num_of_regs = ARRAY_SIZE(common_regs),
 	.regs = common_regs,
 };
@@ -1249,11 +1253,13 @@ static int ov9282_power_on(struct device *dev)
 					OV9282_GATED_CLOCK : 0);
 	if (ret) {
 		dev_err(ov9282->dev, "fail to write MIPI_CTRL00");
-		return ret;
+		goto error_clk;
 	}
 
 	return 0;
 
+error_clk:
+	clk_disable_unprepare(ov9282->inclk);
 error_reset:
 	gpiod_set_value_cansleep(ov9282->reset_gpio, 0);
 
@@ -1400,6 +1406,8 @@ static int ov9282_probe(struct i2c_client *client)
 
 	/* Initialize subdev */
 	v4l2_i2c_subdev_init(&ov9282->sd, client, &ov9282_subdev_ops);
+	v4l2_i2c_subdev_set_name(&ov9282->sd, client,
+				 device_get_match_data(ov9282->dev), NULL);
 
 	ret = ov9282_parse_hw_config(ov9282);
 	if (ret) {
@@ -1499,7 +1507,8 @@ static const struct dev_pm_ops ov9282_pm_ops = {
 };
 
 static const struct of_device_id ov9282_of_match[] = {
-	{ .compatible = "ovti,ov9282" },
+	{ .compatible = "ovti,ov9281", .data = "ov9281" },
+	{ .compatible = "ovti,ov9282", .data = "ov9282" },
 	{ }
 };
 

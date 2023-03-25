@@ -76,6 +76,9 @@ static int kasan_suite_init(struct kunit_suite *suite)
 		return -1;
 	}
 
+	/* Stop failing KUnit tests on KASAN reports. */
+	kasan_kunit_test_suite_start();
+
 	/*
 	 * Temporarily enable multi-shot mode. Otherwise, KASAN would only
 	 * report the first detected bug and panic the kernel if panic_on_warn
@@ -94,6 +97,7 @@ static int kasan_suite_init(struct kunit_suite *suite)
 
 static void kasan_suite_exit(struct kunit_suite *suite)
 {
+	kasan_kunit_test_suite_end();
 	kasan_restore_multi_shot(multishot);
 	for_each_kernel_tracepoint(unregister_tracepoints, NULL);
 	tracepoint_synchronize_unregister();
@@ -825,7 +829,8 @@ static void kasan_global_oob_left(struct kunit *test)
 static void ksize_unpoisons_memory(struct kunit *test)
 {
 	char *ptr;
-	size_t size = 123, real_size;
+	size_t size = 128 - KASAN_GRANULE_SIZE - 5;
+	size_t real_size;
 
 	ptr = kmalloc(size, GFP_KERNEL);
 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptr);
@@ -840,7 +845,9 @@ static void ksize_unpoisons_memory(struct kunit *test)
 	ptr[size - 1] = 'x';
 
 	/* These must trigger a KASAN report. */
-	KUNIT_EXPECT_KASAN_FAIL(test, ((volatile char *)ptr)[size]);
+	if (IS_ENABLED(CONFIG_KASAN_GENERIC))
+		KUNIT_EXPECT_KASAN_FAIL(test, ((volatile char *)ptr)[size]);
+	KUNIT_EXPECT_KASAN_FAIL(test, ((volatile char *)ptr)[size + 5]);
 	KUNIT_EXPECT_KASAN_FAIL(test, ((volatile char *)ptr)[real_size - 1]);
 
 	kfree(ptr);

@@ -1119,6 +1119,9 @@ struct file_lock {
 			int state;		/* state of grant or error if -ve */
 			unsigned int	debug_id;
 		} afs;
+		struct {
+			struct inode *inode;
+		} ceph;
 	} fl_u;
 } __randomize_layout;
 
@@ -1289,6 +1292,11 @@ static inline int vfs_lock_file(struct file *filp, unsigned int cmd,
 static inline int vfs_cancel_lock(struct file *filp, struct file_lock *fl)
 {
 	return 0;
+}
+
+static inline bool vfs_inode_has_locks(struct inode *inode)
+{
+	return false;
 }
 
 static inline int locks_lock_inode_wait(struct inode *inode, struct file_lock *fl)

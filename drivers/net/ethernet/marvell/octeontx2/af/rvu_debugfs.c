@@ -2613,7 +2613,7 @@ static void rvu_dbg_cgx_init(struct rvu *rvu)
 		rvu->rvu_dbg.cgx = debugfs_create_dir(dname,
 						      rvu->rvu_dbg.cgx_root);
 
-		for_each_set_bit(lmac_id, &lmac_bmap, MAX_LMAC_PER_CGX) {
+		for_each_set_bit(lmac_id, &lmac_bmap, rvu->hw->lmac_per_cgx) {
 			/* lmac debugfs dir */
 			sprintf(dname, "lmac%d", lmac_id);
 			rvu->rvu_dbg.lmac =
@@ -2801,6 +2801,14 @@ static void rvu_dbg_npc_mcam_show_flows(struct seq_file *s,
 		case NPC_DIP_IPV6:
 			seq_printf(s, "%pI6 ", rule->packet.ip6dst);
 			seq_printf(s, "mask %pI6\n", rule->mask.ip6dst);
+			break;
+		case NPC_IPFRAG_IPV6:
+			seq_printf(s, "0x%x ", rule->packet.next_header);
+			seq_printf(s, "mask 0x%x\n", rule->mask.next_header);
+			break;
+		case NPC_IPFRAG_IPV4:
+			seq_printf(s, "0x%x ", rule->packet.ip_flag);
+			seq_printf(s, "mask 0x%x\n", rule->mask.ip_flag);
 			break;
 		case NPC_SPORT_TCP:
 		case NPC_SPORT_UDP:

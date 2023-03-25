@@ -262,11 +262,11 @@ static uint32_t dcn32_calculate_cab_allocation(struct dc *dc, struct dc_state *c
 		num_mblks = ((mall_alloc_width_blk_aligned + mblk_width - 1) / mblk_width) *
 				((mall_alloc_height_blk_aligned + mblk_height - 1) / mblk_height);
 
-		/* For DCC:
-		 * meta_num_mblk = CEILING(full_mblk_width_ub_l*full_mblk_height_ub_l*Bpe/256/mblk_bytes, 1)
+		/*For DCC:
+		 * meta_num_mblk = CEILING(meta_pitch*full_vp_height*Bpe/256/mblk_bytes, 1)
 		 */
 		if (pipe->plane_state->dcc.enable)
-			num_mblks += (mall_alloc_width_blk_aligned * mall_alloc_width_blk_aligned * bytes_per_pixel +
+			num_mblks += (pipe->plane_state->dcc.meta_pitch * pipe->plane_res.scl_data.viewport.height * bytes_per_pixel +
 					(256 * DCN3_2_MALL_MBLK_SIZE_BYTES) - 1) / (256 * DCN3_2_MALL_MBLK_SIZE_BYTES);
 
 		bytes_in_mall = num_mblks * DCN3_2_MALL_MBLK_SIZE_BYTES;
@@ -316,8 +316,8 @@ static uint32_t dcn32_calculate_cab_allocation(struct dc *dc, struct dc_state *c
 					cache_lines_used += (((cursor_size + DCN3_2_MALL_MBLK_SIZE_BYTES - 1) /
 							DCN3_2_MALL_MBLK_SIZE_BYTES) * DCN3_2_MALL_MBLK_SIZE_BYTES) /
 							dc->caps.cache_line_size + 2;
+					break;
 				}
-				break;
 			}
 	}
 
@@ -703,11 +703,7 @@ void dcn32_subvp_update_force_pstate(struct dc *dc, struct dc_state *context)
 	for (i = 0; i < dc->res_pool->pipe_count; i++) {
 		struct pipe_ctx *pipe = &context->res_ctx.pipe_ctx[i];
 
-		// For SubVP + DRR, also force disallow on the DRR pipe
-		// (We will force allow in the DMUB sequence -- some DRR timings by default won't allow P-State so we have
-		// to force once the vblank is stretched).
-		if (pipe->stream && pipe->plane_state && (pipe->stream->mall_stream_config.type == SUBVP_MAIN ||
-				(pipe->stream->mall_stream_config.type == SUBVP_NONE && pipe->stream->ignore_msa_timing_param))) {
+		if (pipe->stream && pipe->plane_state && (pipe->stream->mall_stream_config.type == SUBVP_MAIN)) {
 			struct hubp *hubp = pipe->plane_res.hubp;
 
 			if (hubp && hubp->funcs->hubp_update_force_pstate_disallow)
@@ -784,6 +780,10 @@ void dcn32_program_mall_pipe_config(struct dc *dc, struct dc_state *context)
 	// Update MALL_SEL register for each pipe
 	if (hws && hws->funcs.update_mall_sel)
 		hws->funcs.update_mall_sel(dc, context);
+
+	//update subvp force pstate
+	if (hws && hws->funcs.subvp_update_force_pstate)
+		dc->hwseq->funcs.subvp_update_force_pstate(dc, context);
 
 	// Program FORCE_ONE_ROW_FOR_FRAME and CURSOR_REQ_MODE for main subvp pipes
 	for (i = 0; i < dc->res_pool->pipe_count; i++) {

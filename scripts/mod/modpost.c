@@ -822,10 +822,10 @@ static void check_section(const char *modname, struct elf_info *elf,
 #define ALL_EXIT_SECTIONS EXIT_SECTIONS, ALL_XXXEXIT_SECTIONS
 
 #define DATA_SECTIONS ".data", ".data.rel"
-#define TEXT_SECTIONS ".text", ".text.unlikely", ".sched.text", \
+#define TEXT_SECTIONS ".text", ".text.*", ".sched.text", \
 		".kprobes.text", ".cpuidle.text", ".noinstr.text"
 #define OTHER_TEXT_SECTIONS ".ref.text", ".head.text", ".spinlock.text", \
-		".fixup", ".entry.text", ".exception.text", ".text.*", \
+		".fixup", ".entry.text", ".exception.text", \
 		".coldtext", ".softirqentry.text"
 
 #define INIT_SECTIONS      ".init.*"
@@ -1521,6 +1521,14 @@ static int addend_mips_rel(struct elf_info *elf, Elf_Shdr *sechdr, Elf_Rela *r)
 #define R_RISCV_SUB32		39
 #endif
 
+#ifndef EM_LOONGARCH
+#define EM_LOONGARCH		258
+#endif
+
+#ifndef R_LARCH_SUB32
+#define R_LARCH_SUB32		55
+#endif
+
 static void section_rela(const char *modname, struct elf_info *elf,
 			 Elf_Shdr *sechdr)
 {
@@ -1560,6 +1568,11 @@ static void section_rela(const char *modname, struct elf_info *elf,
 		case EM_RISCV:
 			if (!strcmp("__ex_table", fromsec) &&
 			    ELF_R_TYPE(r.r_info) == R_RISCV_SUB32)
+				continue;
+			break;
+		case EM_LOONGARCH:
+			if (!strcmp("__ex_table", fromsec) &&
+			    ELF_R_TYPE(r.r_info) == R_LARCH_SUB32)
 				continue;
 			break;
 		}
@@ -1856,11 +1869,9 @@ static void read_symbols_from_files(const char *filename)
 	FILE *in = stdin;
 	char fname[PATH_MAX];
 
-	if (strcmp(filename, "-") != 0) {
-		in = fopen(filename, "r");
-		if (!in)
-			fatal("Can't open filenames file %s: %m", filename);
-	}
+	in = fopen(filename, "r");
+	if (!in)
+		fatal("Can't open filenames file %s: %m", filename);
 
 	while (fgets(fname, PATH_MAX, in) != NULL) {
 		if (strends(fname, "\n"))
@@ -1868,8 +1879,7 @@ static void read_symbols_from_files(const char *filename)
 		read_symbols(fname);
 	}
 
-	if (in != stdin)
-		fclose(in);
+	fclose(in);
 }
 
 #define SZ 500

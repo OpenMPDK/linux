@@ -5,23 +5,10 @@
 #include <bpf/bpf_tracing.h>
 #include <bpf/bpf_core_read.h>
 
-/* maximum stack trace depth */
-#define MAX_STACKS   8
+#include "lock_data.h"
 
 /* default buffer size */
 #define MAX_ENTRIES  10240
-
-struct contention_key {
-	__s32 stack_id;
-};
-
-struct contention_data {
-	__u64 total_time;
-	__u64 min_time;
-	__u64 max_time;
-	__u32 count;
-	__u32 flags;
-};
 
 struct tstamp_data {
 	__u64 timestamp;
@@ -34,7 +21,7 @@ struct tstamp_data {
 struct {
 	__uint(type, BPF_MAP_TYPE_STACK_TRACE);
 	__uint(key_size, sizeof(__u32));
-	__uint(value_size, MAX_STACKS * sizeof(__u64));
+	__uint(value_size, sizeof(__u64));
 	__uint(max_entries, MAX_ENTRIES);
 } stacks SEC(".maps");
 
@@ -57,6 +44,13 @@ struct {
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
 	__uint(key_size, sizeof(__u32));
+	__uint(value_size, sizeof(struct contention_task_data));
+	__uint(max_entries, MAX_ENTRIES);
+} task_data SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(key_size, sizeof(__u32));
 	__uint(value_size, sizeof(__u8));
 	__uint(max_entries, 1);
 } cpu_filter SEC(".maps");
@@ -68,16 +62,35 @@ struct {
 	__uint(max_entries, 1);
 } task_filter SEC(".maps");
 
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(key_size, sizeof(__u32));
+	__uint(value_size, sizeof(__u8));
+	__uint(max_entries, 1);
+} type_filter SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(key_size, sizeof(__u64));
+	__uint(value_size, sizeof(__u8));
+	__uint(max_entries, 1);
+} addr_filter SEC(".maps");
+
 /* control flags */
 int enabled;
 int has_cpu;
 int has_task;
+int has_type;
+int has_addr;
 int stack_skip;
+
+/* determine the key of lock stat */
+int aggr_mode;
 
 /* error stat */
 int lost;
 
-static inline int can_record(void)
+static inline int can_record(u64 *ctx)
 {
 	if (has_cpu) {
 		__u32 cpu = bpf_get_smp_processor_id();
@@ -97,7 +110,38 @@ static inline int can_record(void)
 			return 0;
 	}
 
+	if (has_type) {
+		__u8 *ok;
+		__u32 flags = (__u32)ctx[1];
+
+		ok = bpf_map_lookup_elem(&type_filter, &flags);
+		if (!ok)
+			return 0;
+	}
+
+	if (has_addr) {
+		__u8 *ok;
+		__u64 addr = ctx[0];
+
+		ok = bpf_map_lookup_elem(&addr_filter, &addr);
+		if (!ok)
+			return 0;
+	}
+
 	return 1;
+}
+
+static inline void update_task_data(__u32 pid)
+{
+	struct contention_task_data *p;
+
+	p = bpf_map_lookup_elem(&task_data, &pid);
+	if (p == NULL) {
+		struct contention_task_data data;
+
+		bpf_get_current_comm(data.comm, sizeof(data.comm));
+		bpf_map_update_elem(&task_data, &pid, &data, BPF_NOEXIST);
+	}
 }
 
 SEC("tp_btf/contention_begin")
@@ -106,7 +150,7 @@ int contention_begin(u64 *ctx)
 	__u32 pid;
 	struct tstamp_data *pelem;
 
-	if (!enabled || !can_record())
+	if (!enabled || !can_record(ctx))
 		return 0;
 
 	pid = bpf_get_current_pid_tgid();
@@ -128,10 +172,14 @@ int contention_begin(u64 *ctx)
 	pelem->timestamp = bpf_ktime_get_ns();
 	pelem->lock = (__u64)ctx[0];
 	pelem->flags = (__u32)ctx[1];
-	pelem->stack_id = bpf_get_stackid(ctx, &stacks, BPF_F_FAST_STACK_CMP | stack_skip);
 
-	if (pelem->stack_id < 0)
-		lost++;
+	if (aggr_mode == LOCK_AGGR_CALLER) {
+		pelem->stack_id = bpf_get_stackid(ctx, &stacks,
+						  BPF_F_FAST_STACK_CMP | stack_skip);
+		if (pelem->stack_id < 0)
+			lost++;
+	}
+
 	return 0;
 }
 
@@ -154,7 +202,22 @@ int contention_end(u64 *ctx)
 
 	duration = bpf_ktime_get_ns() - pelem->timestamp;
 
-	key.stack_id = pelem->stack_id;
+	switch (aggr_mode) {
+	case LOCK_AGGR_CALLER:
+		key.aggr_key = pelem->stack_id;
+		break;
+	case LOCK_AGGR_TASK:
+		key.aggr_key = pid;
+		update_task_data(pid);
+		break;
+	case LOCK_AGGR_ADDR:
+		key.aggr_key = pelem->lock;
+		break;
+	default:
+		/* should not happen */
+		return 0;
+	}
+
 	data = bpf_map_lookup_elem(&lock_stat, &key);
 	if (!data) {
 		struct contention_data first = {

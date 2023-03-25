@@ -11,9 +11,6 @@
 #include <linux/netdevice.h>
 
 /* Use the generated API model */
-#ifdef CONFIG_VCAP_KUNIT_TEST
-#include "vcap_ag_api_kunit.h"
-#endif
 #include "vcap_ag_api.h"
 
 #define VCAP_CID_LOOKUP_SIZE          100000 /* Chains in a lookup */
@@ -271,7 +268,6 @@ struct vcap_operations {
 
 /* VCAP API Client control interface */
 struct vcap_control {
-	u32 rule_id; /* last used rule id (unique across VCAP instances) */
 	struct vcap_operations *ops;  /* client supplied operations */
 	const struct vcap_info *vcaps; /* client supplied vcap models */
 	const struct vcap_statistics *stats; /* client supplied vcap stats */

@@ -51,7 +51,6 @@ BTF_SET_END(bpf_lsm_current_hooks)
  */
 BTF_SET_START(bpf_lsm_locked_sockopt_hooks)
 #ifdef CONFIG_SECURITY_NETWORK
-BTF_ID(func, bpf_lsm_socket_sock_rcv_skb)
 BTF_ID(func, bpf_lsm_sock_graft)
 BTF_ID(func, bpf_lsm_inet_csk_clone)
 BTF_ID(func, bpf_lsm_inet_conn_established)
@@ -345,9 +344,27 @@ BTF_ID(func, bpf_lsm_task_to_inode)
 BTF_ID(func, bpf_lsm_userns_create)
 BTF_SET_END(sleepable_lsm_hooks)
 
+BTF_SET_START(untrusted_lsm_hooks)
+BTF_ID(func, bpf_lsm_bpf_map_free_security)
+BTF_ID(func, bpf_lsm_bpf_prog_alloc_security)
+BTF_ID(func, bpf_lsm_bpf_prog_free_security)
+BTF_ID(func, bpf_lsm_file_alloc_security)
+BTF_ID(func, bpf_lsm_file_free_security)
+#ifdef CONFIG_SECURITY_NETWORK
+BTF_ID(func, bpf_lsm_sk_alloc_security)
+BTF_ID(func, bpf_lsm_sk_free_security)
+#endif /* CONFIG_SECURITY_NETWORK */
+BTF_ID(func, bpf_lsm_task_free)
+BTF_SET_END(untrusted_lsm_hooks)
+
 bool bpf_lsm_is_sleepable_hook(u32 btf_id)
 {
 	return btf_id_set_contains(&sleepable_lsm_hooks, btf_id);
+}
+
+bool bpf_lsm_is_trusted(const struct bpf_prog *prog)
+{
+	return !btf_id_set_contains(&untrusted_lsm_hooks, prog->aux->attach_btf_id);
 }
 
 const struct bpf_prog_ops lsm_prog_ops = {

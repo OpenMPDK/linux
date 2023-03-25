@@ -6,7 +6,6 @@
 #include <linux/bug.h>
 #include <linux/kernel.h>
 #include <linux/list.h>
-#include <linux/once.h>
 
 #include <uapi/linux/random.h>
 
@@ -152,8 +151,6 @@ declare_get_random_var_wait(long, unsigned long)
  * for legacy reasons.
  */
 #include <linux/prandom.h>
-
-#include <asm/archrandom.h>
 
 #ifdef CONFIG_SMP
 int random_prepare_cpu(unsigned int cpu);

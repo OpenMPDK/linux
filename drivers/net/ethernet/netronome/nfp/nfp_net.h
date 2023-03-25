@@ -88,6 +88,9 @@
 #define NFP_NET_FL_BATCH	16	/* Add freelist in this Batch size */
 #define NFP_NET_XDP_MAX_COMPLETE 2048	/* XDP bufs to reclaim in NAPI poll */
 
+/* MC definitions */
+#define NFP_NET_CFG_MAC_MC_MAX	1024	/* The maximum number of MC address per port*/
+
 /* Offload definitions */
 #define NFP_NET_N_VXLAN_PORTS	(NFP_NET_CFG_VXLAN_SZ / sizeof(__be16))
 
@@ -476,6 +479,7 @@ struct nfp_stat_pair {
  * @rx_dma_off:		Offset at which DMA packets (for XDP headroom)
  * @rx_offset:		Offset in the RX buffers where packet data starts
  * @ctrl:		Local copy of the control register/word.
+ * @ctrl_w1:		Local copy of the control register/word1.
  * @fl_bufsz:		Currently configured size of the freelist buffers
  * @xdp_prog:		Installed XDP program
  * @tx_rings:		Array of pre-allocated TX ring structures
@@ -508,6 +512,7 @@ struct nfp_net_dp {
 	u32 rx_dma_off;
 
 	u32 ctrl;
+	u32 ctrl_w1;
 	u32 fl_bufsz;
 
 	struct bpf_prog *xdp_prog;
@@ -612,6 +617,10 @@ struct nfp_net_dp {
  * @vnic_no_name:	For non-port PF vNIC make ndo_get_phys_port_name return
  *			-EOPNOTSUPP to keep backwards compatibility (set by app)
  * @port:		Pointer to nfp_port structure if vNIC is a port
+ * @mbox_amsg:		Asynchronously processed message via mailbox
+ * @mbox_amsg.lock:	Protect message list
+ * @mbox_amsg.list:	List of message to process
+ * @mbox_amsg.work:	Work to process message asynchronously
  * @app_priv:		APP private data for this vNIC
  */
 struct nfp_net {
@@ -713,8 +722,24 @@ struct nfp_net {
 
 	struct nfp_port *port;
 
+	struct {
+		spinlock_t lock;
+		struct list_head list;
+		struct work_struct work;
+	} mbox_amsg;
+
 	void *app_priv;
 };
+
+struct nfp_mbox_amsg_entry {
+	struct list_head list;
+	int (*cfg)(struct nfp_net *nn, struct nfp_mbox_amsg_entry *entry);
+	u32 cmd;
+	char msg[];
+};
+
+int nfp_net_sched_mbox_amsg_work(struct nfp_net *nn, u32 cmd, const void *data, size_t len,
+				 int (*cb)(struct nfp_net *, struct nfp_mbox_amsg_entry *));
 
 /* Functions to read/write from/to a BAR
  * Performs any endian conversion necessary.

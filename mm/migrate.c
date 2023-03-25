@@ -222,14 +222,10 @@ static bool remove_migration_pte(struct folio *folio,
 			pte = pte_mkdirty(pte);
 		if (is_writable_migration_entry(entry))
 			pte = maybe_mkwrite(pte, vma);
-		else
-			/* NOTE: mk_pte can have write bit set */
-			pte = pte_wrprotect(pte);
-
-		if (pte_swp_uffd_wp(*pvmw.pte)) {
-			WARN_ON_ONCE(pte_write(pte));
+		else if (pte_swp_uffd_wp(*pvmw.pte))
 			pte = pte_mkuffd_wp(pte);
-		}
+		else
+			pte = pte_wrprotect(pte);
 
 		if (folio_test_anon(folio) && !is_readable_migration_entry(entry))
 			rmap_flags |= RMAP_EXCLUSIVE;
@@ -835,6 +831,7 @@ int buffer_migrate_folio_norefs(struct address_space *mapping,
 {
 	return __buffer_migrate_folio(mapping, dst, src, mode, true);
 }
+EXPORT_SYMBOL_GPL(buffer_migrate_folio_norefs);
 #endif
 
 int filemap_migrate_folio(struct address_space *mapping,
@@ -1844,7 +1841,7 @@ static int do_pages_move(struct mm_struct *mm, nodemask_t task_nodes,
 			goto out_flush;
 		if (get_user(node, nodes + i))
 			goto out_flush;
-		addr = (unsigned long)untagged_addr(mm, p);
+		addr = (unsigned long)untagged_addr(p);
 
 		err = -ENODEV;
 		if (node < 0 || node >= MAX_NUMNODES)

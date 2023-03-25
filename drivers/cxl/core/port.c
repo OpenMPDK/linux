@@ -628,6 +628,8 @@ static struct cxl_port *cxl_port_alloc(struct device *uport,
 			iter = to_cxl_port(iter->dev.parent);
 		if (iter->host_bridge)
 			port->host_bridge = iter->host_bridge;
+		else if (parent_dport->rch)
+			port->host_bridge = parent_dport->dport;
 		else
 			port->host_bridge = iter->uport;
 		dev_dbg(uport, "host-bridge: %s\n", dev_name(port->host_bridge));
@@ -899,10 +901,10 @@ static void cxl_dport_unlink(void *data)
 	sysfs_remove_link(&port->dev.kobj, link_name);
 }
 
-static struct cxl_dport *__devm_cxl_add_dport(struct cxl_port *port,
-					      struct device *dport_dev,
-					      int port_id,
-					      resource_size_t component_reg_phys)
+static struct cxl_dport *
+__devm_cxl_add_dport(struct cxl_port *port, struct device *dport_dev,
+		     int port_id, resource_size_t component_reg_phys,
+		     resource_size_t rcrb)
 {
 	char link_name[CXL_TARGET_STRLEN];
 	struct cxl_dport *dport;
@@ -932,6 +934,9 @@ static struct cxl_dport *__devm_cxl_add_dport(struct cxl_port *port,
 	dport->port_id = port_id;
 	dport->component_reg_phys = component_reg_phys;
 	dport->port = port;
+	if (rcrb != CXL_RESOURCE_NONE)
+		dport->rch = true;
+	dport->rcrb = rcrb;
 
 	cond_cxl_root_lock(port);
 	rc = add_dport(port, dport);
@@ -956,7 +961,7 @@ static struct cxl_dport *__devm_cxl_add_dport(struct cxl_port *port,
 }
 
 /**
- * devm_cxl_add_dport - append downstream port data to a cxl_port
+ * devm_cxl_add_dport - append VH downstream port data to a cxl_port
  * @port: the cxl_port that references this dport
  * @dport_dev: firmware or PCI device representing the dport
  * @port_id: identifier for this dport in a decoder's target list
@@ -973,7 +978,7 @@ struct cxl_dport *devm_cxl_add_dport(struct cxl_port *port,
 	struct cxl_dport *dport;
 
 	dport = __devm_cxl_add_dport(port, dport_dev, port_id,
-				     component_reg_phys);
+				     component_reg_phys, CXL_RESOURCE_NONE);
 	if (IS_ERR(dport)) {
 		dev_dbg(dport_dev, "failed to add dport to %s: %ld\n",
 			dev_name(&port->dev), PTR_ERR(dport));
@@ -985,6 +990,42 @@ struct cxl_dport *devm_cxl_add_dport(struct cxl_port *port,
 	return dport;
 }
 EXPORT_SYMBOL_NS_GPL(devm_cxl_add_dport, CXL);
+
+/**
+ * devm_cxl_add_rch_dport - append RCH downstream port data to a cxl_port
+ * @port: the cxl_port that references this dport
+ * @dport_dev: firmware or PCI device representing the dport
+ * @port_id: identifier for this dport in a decoder's target list
+ * @component_reg_phys: optional location of CXL component registers
+ * @rcrb: mandatory location of a Root Complex Register Block
+ *
+ * See CXL 3.0 9.11.8 CXL Devices Attached to an RCH
+ */
+struct cxl_dport *devm_cxl_add_rch_dport(struct cxl_port *port,
+					 struct device *dport_dev, int port_id,
+					 resource_size_t component_reg_phys,
+					 resource_size_t rcrb)
+{
+	struct cxl_dport *dport;
+
+	if (rcrb == CXL_RESOURCE_NONE) {
+		dev_dbg(&port->dev, "failed to add RCH dport, missing RCRB\n");
+		return ERR_PTR(-EINVAL);
+	}
+
+	dport = __devm_cxl_add_dport(port, dport_dev, port_id,
+				     component_reg_phys, rcrb);
+	if (IS_ERR(dport)) {
+		dev_dbg(dport_dev, "failed to add RCH dport to %s: %ld\n",
+			dev_name(&port->dev), PTR_ERR(dport));
+	} else {
+		dev_dbg(dport_dev, "RCH dport added to %s\n",
+			dev_name(&port->dev));
+	}
+
+	return dport;
+}
+EXPORT_SYMBOL_NS_GPL(devm_cxl_add_rch_dport, CXL);
 
 static int add_ep(struct cxl_ep *new)
 {
@@ -1171,45 +1212,6 @@ static void reap_dports(struct cxl_port *port)
 	}
 }
 
-int devm_cxl_add_endpoint(struct cxl_memdev *cxlmd,
-			  struct cxl_dport *parent_dport)
-{
-	struct cxl_port *parent_port = parent_dport->port;
-	struct cxl_dev_state *cxlds = cxlmd->cxlds;
-	struct cxl_port *endpoint, *iter, *down;
-	int rc;
-
-	/*
-	 * Now that the path to the root is established record all the
-	 * intervening ports in the chain.
-	 */
-	for (iter = parent_port, down = NULL; !is_cxl_root(iter);
-	     down = iter, iter = to_cxl_port(iter->dev.parent)) {
-		struct cxl_ep *ep;
-
-		ep = cxl_ep_load(iter, cxlmd);
-		ep->next = down;
-	}
-
-	endpoint = devm_cxl_add_port(&parent_port->dev, &cxlmd->dev,
-				     cxlds->component_reg_phys, parent_dport);
-	if (IS_ERR(endpoint))
-		return PTR_ERR(endpoint);
-
-	rc = cxl_endpoint_autoremove(cxlmd, endpoint);
-	if (rc)
-		return rc;
-
-	if (!endpoint->dev.driver) {
-		dev_err(&cxlmd->dev, "%s failed probe\n",
-			dev_name(&endpoint->dev));
-		return -ENXIO;
-	}
-
-	return 0;
-}
-EXPORT_SYMBOL_NS_GPL(devm_cxl_add_endpoint, CXL);
-
 static void cxl_detach_ep(void *data)
 {
 	struct cxl_memdev *cxlmd = data;
@@ -1290,7 +1292,7 @@ static resource_size_t find_component_registers(struct device *dev)
 	pdev = to_pci_dev(dev);
 
 	cxl_find_regblock(pdev, CXL_REGLOC_RBI_COMPONENT, &map);
-	return cxl_regmap_to_base(pdev, &map);
+	return map.resource;
 }
 
 static int add_port_attach_ep(struct cxl_memdev *cxlmd,
@@ -1366,6 +1368,13 @@ int devm_cxl_enumerate_ports(struct cxl_memdev *cxlmd)
 	struct device *dev = &cxlmd->dev;
 	struct device *iter;
 	int rc;
+
+	/*
+	 * Skip intermediate port enumeration in the RCH case, there
+	 * are no ports in between a host bridge and an endpoint.
+	 */
+	if (cxlmd->cxlds->rcd)
+		return 0;
 
 	rc = devm_add_action_or_reset(&cxlmd->dev, cxl_detach_ep, cxlmd);
 	if (rc)
@@ -1475,7 +1484,7 @@ static int decoder_populate_targets(struct cxl_switch_decoder *cxlsd,
 	return rc;
 }
 
-static struct cxl_dport *cxl_hb_modulo(struct cxl_root_decoder *cxlrd, int pos)
+struct cxl_dport *cxl_hb_modulo(struct cxl_root_decoder *cxlrd, int pos)
 {
 	struct cxl_switch_decoder *cxlsd = &cxlrd->cxlsd;
 	struct cxl_decoder *cxld = &cxlsd->cxld;
@@ -1488,6 +1497,7 @@ static struct cxl_dport *cxl_hb_modulo(struct cxl_root_decoder *cxlrd, int pos)
 
 	return cxlrd->cxlsd.target[pos % iw];
 }
+EXPORT_SYMBOL_NS_GPL(cxl_hb_modulo, CXL);
 
 static struct lock_class_key cxl_decoder_key;
 
@@ -1549,6 +1559,7 @@ static int cxl_switch_decoder_init(struct cxl_port *port,
  * cxl_root_decoder_alloc - Allocate a root level decoder
  * @port: owning CXL root of this decoder
  * @nr_targets: static number of downstream targets
+ * @calc_hb: which host bridge covers the n'th position by granularity
  *
  * Return: A new cxl decoder to be registered by cxl_decoder_add(). A
  * 'CXL root' decoder is one that decodes from a top-level / static platform
@@ -1556,7 +1567,8 @@ static int cxl_switch_decoder_init(struct cxl_port *port,
  * topology.
  */
 struct cxl_root_decoder *cxl_root_decoder_alloc(struct cxl_port *port,
-						unsigned int nr_targets)
+						unsigned int nr_targets,
+						cxl_calc_hb_fn calc_hb)
 {
 	struct cxl_root_decoder *cxlrd;
 	struct cxl_switch_decoder *cxlsd;
@@ -1578,7 +1590,7 @@ struct cxl_root_decoder *cxl_root_decoder_alloc(struct cxl_port *port,
 		return ERR_PTR(rc);
 	}
 
-	cxlrd->calc_hb = cxl_hb_modulo;
+	cxlrd->calc_hb = calc_hb;
 
 	cxld = &cxlsd->cxld;
 	cxld->dev.type = &cxl_decoder_root_type;
@@ -1844,11 +1856,26 @@ static void cxl_bus_remove(struct device *dev)
 
 static struct workqueue_struct *cxl_bus_wq;
 
-int cxl_bus_rescan(void)
+static void cxl_bus_rescan_queue(struct work_struct *w)
 {
-	return bus_rescan_devices(&cxl_bus_type);
+	int rc = bus_rescan_devices(&cxl_bus_type);
+
+	pr_debug("CXL bus rescan result: %d\n", rc);
+}
+
+void cxl_bus_rescan(void)
+{
+	static DECLARE_WORK(rescan_work, cxl_bus_rescan_queue);
+
+	queue_work(cxl_bus_wq, &rescan_work);
 }
 EXPORT_SYMBOL_NS_GPL(cxl_bus_rescan, CXL);
+
+void cxl_bus_drain(void)
+{
+	drain_workqueue(cxl_bus_wq);
+}
+EXPORT_SYMBOL_NS_GPL(cxl_bus_drain, CXL);
 
 bool schedule_cxl_memdev_detach(struct cxl_memdev *cxlmd)
 {

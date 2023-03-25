@@ -123,6 +123,7 @@ bool console_srcu_read_lock_is_held(void)
 {
 	return srcu_read_lock_held(&console_srcu);
 }
+EXPORT_SYMBOL(console_srcu_read_lock_is_held);
 #endif
 
 enum devkmsg_log_bits {
@@ -1891,6 +1892,7 @@ static void console_lock_spinning_enable(void)
 /**
  * console_lock_spinning_disable_and_check - mark end of code where another
  *	thread was able to busy wait and check if there is a waiter
+ * @cookie: cookie returned from console_srcu_read_lock()
  *
  * This is called at the end of the section where spinning is allowed.
  * It has two functions. First, it is a signal that it is no longer
@@ -2480,7 +2482,7 @@ static int __add_preferred_console(char *name, int idx, char *options,
 		return -E2BIG;
 	if (!brl_options)
 		preferred_console = i;
-	strlcpy(c->name, name, sizeof(c->name));
+	strscpy(c->name, name, sizeof(c->name));
 	c->options = options;
 	set_user_specified(c, user_specified);
 	braille_set_options(c, brl_options);

@@ -234,15 +234,6 @@ struct rt_stats {
 	u32	CurrentShowTxate;
 };
 
-struct channel_access_setting {
-	u16 SIFS_Timer;
-	u16 DIFS_Timer;
-	u16 SlotTimeTimer;
-	u16 EIFS_Timer;
-	u16 CWminIndex;
-	u16 CWmaxIndex;
-};
-
 struct init_gain {
 	u8	xaagccore1;
 	u8	xbagccore1;
@@ -309,7 +300,6 @@ struct r8192_priv {
 
 	bool		bfirst_init;
 	bool		bfirst_after_down;
-	bool		initialized_at_probe;
 	bool		being_init_adapter;
 
 	int		irq;
@@ -322,15 +312,10 @@ struct r8192_priv {
 	struct delayed_work		txpower_tracking_wq;
 	struct delayed_work		rfpath_check_wq;
 	struct delayed_work		gpio_change_rf_wq;
-
-	struct channel_access_setting ChannelAccessSetting;
-
 	struct rtl819x_ops			*ops;
 	struct rtllib_device			*rtllib;
 
 	struct work_struct				reset_wq;
-
-	struct log_int_8190 int_log;
 
 	enum rt_customer_id CustomerID;
 
@@ -339,8 +324,6 @@ struct r8192_priv {
 	enum ht_channel_width CurrentChannelBW;
 	struct bb_reg_definition PHYRegDef[4];
 	struct rate_adaptive rate_adaptive;
-
-	enum acm_method AcmMethod;
 
 	struct rt_firmware			*pFirmware;
 	enum rtl819x_loopback LoopbackMode;

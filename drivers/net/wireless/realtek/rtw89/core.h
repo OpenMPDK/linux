@@ -35,6 +35,7 @@ extern const struct ieee80211_ops rtw89_ops;
 #define RSSI_FACTOR 1
 #define RTW89_RSSI_RAW_TO_DBM(rssi) ((s8)((rssi) >> RSSI_FACTOR) - MAX_RSSI)
 #define RTW89_TX_DIV_RSSI_RAW_TH (2 << RSSI_FACTOR)
+#define RTW89_RADIOTAP_ROOM ALIGN(sizeof(struct ieee80211_radiotap_he), 64)
 
 #define RTW89_HTC_MASK_VARIANT GENMASK(1, 0)
 #define RTW89_HTC_VARIANT_HE 3
@@ -2239,6 +2240,8 @@ struct rtw89_phy_rate_pattern {
 struct rtw89_vif {
 	struct list_head list;
 	struct rtw89_dev *rtwdev;
+	enum rtw89_sub_entity_idx sub_entity_idx;
+
 	u8 mac_id;
 	u8 port;
 	u8 mac_addr[ETH_ALEN];
@@ -2811,6 +2814,28 @@ struct rtw89_mac_info {
 	u8 cpwm_seq_num;
 };
 
+#define RTW89_COMPLETION_BUF_SIZE 24
+#define RTW89_WAIT_COND_IDLE UINT_MAX
+
+struct rtw89_completion_data {
+	bool err;
+	u8 buf[RTW89_COMPLETION_BUF_SIZE];
+};
+
+struct rtw89_wait_info {
+	atomic_t cond;
+	struct completion completion;
+	struct rtw89_completion_data data;
+};
+
+#define RTW89_WAIT_FOR_COND_TIMEOUT msecs_to_jiffies(100)
+
+static inline void rtw89_init_wait(struct rtw89_wait_info *wait)
+{
+	init_completion(&wait->completion);
+	atomic_set(&wait->cond, RTW89_WAIT_COND_IDLE);
+}
+
 enum rtw89_fw_type {
 	RTW89_FW_NORMAL = 1,
 	RTW89_FW_WOWLAN = 3,
@@ -2930,6 +2955,13 @@ enum rtw89_entity_mode {
 	RTW89_ENTITY_MODE_SCC,
 };
 
+struct rtw89_sub_entity {
+	struct cfg80211_chan_def chandef;
+	struct rtw89_chan chan;
+	struct rtw89_chan_rcd rcd;
+	struct rtw89_chanctx_cfg *cfg;
+};
+
 struct rtw89_hal {
 	u32 rx_fltr;
 	u8 cv;
@@ -2943,13 +2975,10 @@ struct rtw89_hal {
 	bool support_igi;
 
 	DECLARE_BITMAP(entity_map, NUM_OF_RTW89_SUB_ENTITY);
-	struct cfg80211_chan_def chandef[NUM_OF_RTW89_SUB_ENTITY];
+	struct rtw89_sub_entity sub[NUM_OF_RTW89_SUB_ENTITY];
 
 	bool entity_active;
 	enum rtw89_entity_mode entity_mode;
-
-	struct rtw89_chan chan[NUM_OF_RTW89_SUB_ENTITY];
-	struct rtw89_chan_rcd chan_rcd[NUM_OF_RTW89_SUB_ENTITY];
 };
 
 #define RTW89_MAX_MAC_ID_NUM 128
@@ -3031,7 +3060,7 @@ struct rtw89_dack_info {
 #define RTW89_IQK_CHS_NR 2
 #define RTW89_IQK_PATH_NR 4
 
-struct rtw89_mcc_info {
+struct rtw89_rfk_mcc_info {
 	u8 ch[RTW89_IQK_CHS_NR];
 	u8 band[RTW89_IQK_CHS_NR];
 	u8 table_idx;
@@ -3524,6 +3553,10 @@ struct rtw89_wow_param {
 	struct list_head pkt_list;
 };
 
+struct rtw89_mcc_info {
+	struct rtw89_wait_info wait;
+};
+
 struct rtw89_dev {
 	struct ieee80211_hw *hw;
 	struct device *dev;
@@ -3534,6 +3567,7 @@ struct rtw89_dev {
 	const struct rtw89_chip_info *chip;
 	const struct rtw89_pci_info *pci_info;
 	struct rtw89_hal hal;
+	struct rtw89_mcc_info mcc;
 	struct rtw89_mac_info mac;
 	struct rtw89_fw_info fw;
 	struct rtw89_hci_info hci;
@@ -3577,7 +3611,7 @@ struct rtw89_dev {
 	struct rtw89_dack_info dack;
 	struct rtw89_iqk_info iqk;
 	struct rtw89_dpk_info dpk;
-	struct rtw89_mcc_info mcc;
+	struct rtw89_rfk_mcc_info rfk_mcc;
 	struct rtw89_lck_info lck;
 	struct rtw89_rx_dck_info rx_dck;
 	bool is_tssi_mode[RF_PATH_MAX];
@@ -4110,7 +4144,7 @@ const struct cfg80211_chan_def *rtw89_chandef_get(struct rtw89_dev *rtwdev,
 {
 	struct rtw89_hal *hal = &rtwdev->hal;
 
-	return &hal->chandef[idx];
+	return &hal->sub[idx].chandef;
 }
 
 static inline
@@ -4119,7 +4153,7 @@ const struct rtw89_chan *rtw89_chan_get(struct rtw89_dev *rtwdev,
 {
 	struct rtw89_hal *hal = &rtwdev->hal;
 
-	return &hal->chan[idx];
+	return &hal->sub[idx].chan;
 }
 
 static inline
@@ -4128,7 +4162,7 @@ const struct rtw89_chan_rcd *rtw89_chan_rcd_get(struct rtw89_dev *rtwdev,
 {
 	struct rtw89_hal *hal = &rtwdev->hal;
 
-	return &hal->chan_rcd[idx];
+	return &hal->sub[idx].rcd;
 }
 
 static inline void rtw89_chip_fem_setup(struct rtw89_dev *rtwdev)
@@ -4383,6 +4417,23 @@ static inline struct rtw89_fw_suit *rtw89_fw_suit_get(struct rtw89_dev *rtwdev,
 	return &fw_info->normal;
 }
 
+static inline struct sk_buff *rtw89_alloc_skb_for_rx(struct rtw89_dev *rtwdev,
+						     unsigned int length)
+{
+	struct sk_buff *skb;
+
+	if (rtwdev->hw->conf.flags & IEEE80211_CONF_MONITOR) {
+		skb = dev_alloc_skb(length + RTW89_RADIOTAP_ROOM);
+		if (!skb)
+			return NULL;
+
+		skb_reserve(skb, RTW89_RADIOTAP_ROOM);
+		return skb;
+	}
+
+	return dev_alloc_skb(length);
+}
+
 int rtw89_core_tx_write(struct rtw89_dev *rtwdev, struct ieee80211_vif *vif,
 			struct ieee80211_sta *sta, struct sk_buff *skb, int *qsel);
 int rtw89_h2c_tx(struct rtw89_dev *rtwdev,
@@ -4451,6 +4502,9 @@ int rtw89_regd_init(struct rtw89_dev *rtwdev,
 void rtw89_regd_notifier(struct wiphy *wiphy, struct regulatory_request *request);
 void rtw89_traffic_stats_init(struct rtw89_dev *rtwdev,
 			      struct rtw89_traffic_stats *stats);
+int rtw89_wait_for_cond(struct rtw89_wait_info *wait, unsigned int cond);
+void rtw89_complete_cond(struct rtw89_wait_info *wait, unsigned int cond,
+			 const struct rtw89_completion_data *data);
 int rtw89_core_start(struct rtw89_dev *rtwdev);
 void rtw89_core_stop(struct rtw89_dev *rtwdev);
 void rtw89_core_update_beacon_work(struct work_struct *work);

@@ -224,8 +224,6 @@ void rtl92e_set_reg(struct net_device *dev, u8 variable, u8 *val)
 		u8 acm = pAciAifsn->f.acm;
 		u8 AcmCtrl = rtl92e_readb(dev, AcmHwCtrl);
 
-		AcmCtrl = AcmCtrl | ((priv->AcmMethod == 2) ? 0x0 : 0x1);
-
 		if (acm) {
 			switch (eACI) {
 			case AC0_BE:
@@ -1948,8 +1946,6 @@ void rtl92e_stop_adapter(struct net_device *dev, bool reset)
 
 	for (i = 0; i < MAX_QUEUE_SIZE; i++)
 		skb_queue_purge(&priv->rtllib->skb_waitQ[i]);
-	for (i = 0; i < MAX_QUEUE_SIZE; i++)
-		skb_queue_purge(&priv->rtllib->skb_aggQ[i]);
 
 	skb_queue_purge(&priv->skb_queue);
 }

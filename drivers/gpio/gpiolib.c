@@ -367,12 +367,12 @@ static int gpiochip_set_desc_names(struct gpio_chip *gc)
 static int devprop_gpiochip_set_names(struct gpio_chip *chip)
 {
 	struct gpio_device *gdev = chip->gpiodev;
-	const struct fwnode_handle *fwnode = dev_fwnode(&gdev->dev);
+	struct device *dev = &gdev->dev;
 	const char **names;
 	int ret, i;
 	int count;
 
-	count = fwnode_property_string_array_count(fwnode, "gpio-line-names");
+	count = device_property_string_array_count(dev, "gpio-line-names");
 	if (count < 0)
 		return 0;
 
@@ -385,7 +385,7 @@ static int devprop_gpiochip_set_names(struct gpio_chip *chip)
 	 * gpiochips.
 	 */
 	if (count <= chip->offset) {
-		dev_warn(&gdev->dev, "gpio-line-names too short (length %d), cannot map names for the gpiochip at offset %u\n",
+		dev_warn(dev, "gpio-line-names too short (length %d), cannot map names for the gpiochip at offset %u\n",
 			 count, chip->offset);
 		return 0;
 	}
@@ -394,10 +394,10 @@ static int devprop_gpiochip_set_names(struct gpio_chip *chip)
 	if (!names)
 		return -ENOMEM;
 
-	ret = fwnode_property_read_string_array(fwnode, "gpio-line-names",
+	ret = device_property_read_string_array(dev, "gpio-line-names",
 						names, count);
 	if (ret < 0) {
-		dev_warn(&gdev->dev, "failed to read GPIO line names\n");
+		dev_warn(dev, "failed to read GPIO line names\n");
 		kfree(names);
 		return ret;
 	}
@@ -448,10 +448,11 @@ static unsigned long *gpiochip_allocate_mask(struct gpio_chip *gc)
 
 static unsigned int gpiochip_count_reserved_ranges(struct gpio_chip *gc)
 {
+	struct device *dev = &gc->gpiodev->dev;
 	int size;
 
 	/* Format is "start, count, ..." */
-	size = fwnode_property_count_u32(gc->fwnode, "gpio-reserved-ranges");
+	size = device_property_count_u32(dev, "gpio-reserved-ranges");
 	if (size > 0 && size % 2 == 0)
 		return size;
 
@@ -472,6 +473,7 @@ static int gpiochip_alloc_valid_mask(struct gpio_chip *gc)
 
 static int gpiochip_apply_reserved_ranges(struct gpio_chip *gc)
 {
+	struct device *dev = &gc->gpiodev->dev;
 	unsigned int size;
 	u32 *ranges;
 	int ret;
@@ -484,7 +486,8 @@ static int gpiochip_apply_reserved_ranges(struct gpio_chip *gc)
 	if (!ranges)
 		return -ENOMEM;
 
-	ret = fwnode_property_read_u32_array(gc->fwnode, "gpio-reserved-ranges", ranges, size);
+	ret = device_property_read_u32_array(dev, "gpio-reserved-ranges",
+					     ranges, size);
 	if (ret) {
 		kfree(ranges);
 		return ret;
@@ -546,7 +549,7 @@ EXPORT_SYMBOL_GPL(gpiochip_line_is_valid);
 
 static void gpiodevice_release(struct device *dev)
 {
-	struct gpio_device *gdev = container_of(dev, struct gpio_device, dev);
+	struct gpio_device *gdev = to_gpio_device(dev);
 	unsigned long flags;
 
 	spin_lock_irqsave(&gpio_lock, flags);
@@ -791,6 +794,7 @@ int gpiochip_add_data_with_key(struct gpio_chip *gc, void *data,
 	spin_unlock_irqrestore(&gpio_lock, flags);
 
 	BLOCKING_INIT_NOTIFIER_HEAD(&gdev->notifier);
+	init_rwsem(&gdev->sem);
 
 #ifdef CONFIG_PINCTRL
 	INIT_LIST_HEAD(&gdev->pin_ranges);
@@ -931,6 +935,8 @@ void gpiochip_remove(struct gpio_chip *gc)
 	unsigned long	flags;
 	unsigned int	i;
 
+	down_write(&gdev->sem);
+
 	/* FIXME: should the legacy sysfs handling be moved to gpio_device? */
 	gpiochip_sysfs_unregister(gdev);
 	gpiochip_free_hogs(gc);
@@ -965,6 +971,7 @@ void gpiochip_remove(struct gpio_chip *gc)
 	 * gone.
 	 */
 	gcdev_unregister(gdev);
+	up_write(&gdev->sem);
 	put_device(&gdev->dev);
 }
 EXPORT_SYMBOL_GPL(gpiochip_remove);
@@ -3898,8 +3905,8 @@ static struct gpio_desc *gpiod_find_and_request(struct device *consumer,
 						const char *label,
 						bool platform_lookup_allowed)
 {
+	unsigned long lookupflags = GPIO_LOOKUP_FLAGS_DEFAULT;
 	struct gpio_desc *desc = ERR_PTR(-ENOENT);
-	unsigned long lookupflags;
 	int ret;
 
 	if (!IS_ERR_OR_NULL(fwnode))

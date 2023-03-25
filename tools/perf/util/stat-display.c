@@ -281,19 +281,19 @@ static void print_aggr_id_json(struct perf_stat_config *config,
 
 	switch (config->aggr_mode) {
 	case AGGR_CORE:
-		fprintf(output, "\"core\" : \"S%d-D%d-C%d\", \"cpu-count\" : %d, ",
+		fprintf(output, "\"core\" : \"S%d-D%d-C%d\", \"aggregate-number\" : %d, ",
 			id.socket, id.die, id.core, nr);
 		break;
 	case AGGR_DIE:
-		fprintf(output, "\"die\" : \"S%d-D%d\", \"cpu-count\" : %d, ",
+		fprintf(output, "\"die\" : \"S%d-D%d\", \"aggregate-number\" : %d, ",
 			id.socket, id.die, nr);
 		break;
 	case AGGR_SOCKET:
-		fprintf(output, "\"socket\" : \"S%d\", \"cpu-count\" : %d, ",
+		fprintf(output, "\"socket\" : \"S%d\", \"aggregate-number\" : %d, ",
 			id.socket, nr);
 		break;
 	case AGGR_NODE:
-		fprintf(output, "\"node\" : \"N%d\", \"cpu-count\" : %d, ",
+		fprintf(output, "\"node\" : \"N%d\", \"aggregate-number\" : %d, ",
 			id.node, nr);
 		break;
 	case AGGR_NONE:
@@ -353,7 +353,8 @@ static void do_new_line_std(struct perf_stat_config *config,
 			    struct outstate *os)
 {
 	fputc('\n', os->fh);
-	fputs(os->prefix, os->fh);
+	if (os->prefix)
+		fputs(os->prefix, os->fh);
 	aggr_printout(config, os->evsel, os->id, os->nr);
 	if (config->aggr_mode == AGGR_NONE)
 		fprintf(os->fh, "        ");
@@ -440,7 +441,7 @@ static void new_line_json(struct perf_stat_config *config, void *ctx)
 {
 	struct outstate *os = ctx;
 
-	fputc('\n', os->fh);
+	fputs("\n{", os->fh);
 	if (os->prefix)
 		fprintf(os->fh, "%s", os->prefix);
 	aggr_printout(config, os->evsel, os->id, os->nr);
@@ -686,20 +687,9 @@ static void printout(struct perf_stat_config *config, struct outstate *os,
 	struct evsel *counter = os->evsel;
 
 	if (config->csv_output) {
-		static const int aggr_fields[AGGR_MAX] = {
-			[AGGR_NONE] = 1,
-			[AGGR_GLOBAL] = 0,
-			[AGGR_SOCKET] = 2,
-			[AGGR_DIE] = 2,
-			[AGGR_CORE] = 2,
-			[AGGR_THREAD] = 1,
-			[AGGR_UNSET] = 0,
-			[AGGR_NODE] = 1,
-		};
-
 		pm = config->metric_only ? print_metric_only_csv : print_metric_csv;
 		nl = config->metric_only ? new_line_metric : new_line_csv;
-		os->nfields = 3 + aggr_fields[config->aggr_mode] + (counter->cgrp ? 1 : 0);
+		os->nfields = 4 + (counter->cgrp ? 1 : 0);
 	} else if (config->json_output) {
 		pm = config->metric_only ? print_metric_only_json : print_metric_json;
 		nl = config->metric_only ? new_line_metric : new_line_json;
@@ -741,7 +731,7 @@ static void printout(struct perf_stat_config *config, struct outstate *os,
 		perf_stat__print_shadow_stats(config, counter, uval, map_idx,
 					      &out, &config->metric_events, &rt_stat);
 	} else {
-		pm(config, &os, /*color=*/NULL, /*format=*/NULL, /*unit=*/"", /*val=*/0);
+		pm(config, os, /*color=*/NULL, /*format=*/NULL, /*unit=*/"", /*val=*/0);
 	}
 
 	if (!config->metric_only) {
@@ -814,7 +804,8 @@ static void print_counter_aggrdata(struct perf_stat_config *config,
 	os->nr = aggr->nr;
 	os->evsel = counter;
 
-	if (counter->supported && aggr->nr == 0)
+	/* Skip already merged uncore/hybrid events */
+	if (counter->merged_stat)
 		return;
 
 	uniquify_counter(config, counter);
@@ -822,6 +813,13 @@ static void print_counter_aggrdata(struct perf_stat_config *config,
 	val = aggr->counts.val;
 	ena = aggr->counts.ena;
 	run = aggr->counts.run;
+
+	/*
+	 * Skip value 0 when enabling --per-thread globally, otherwise it will
+	 * have too many 0 output.
+	 */
+	if (val == 0 && config->aggr_mode == AGGR_THREAD && config->system_wide)
+		return;
 
 	if (!metric_only) {
 		if (config->json_output)
@@ -899,9 +897,6 @@ static void print_aggr(struct perf_stat_config *config,
 		print_metric_begin(config, evlist, os, s);
 
 		evlist__for_each_entry(evlist, counter) {
-			if (counter->merged_stat)
-				continue;
-
 			print_counter_aggrdata(config, counter, s, os);
 		}
 		print_metric_end(config, os);
@@ -928,9 +923,6 @@ static void print_aggr_cgroup(struct perf_stat_config *config,
 			print_metric_begin(config, evlist, os, s);
 
 			evlist__for_each_entry(evlist, counter) {
-				if (counter->merged_stat)
-					continue;
-
 				if (counter->cgrp != os->cgrp)
 					continue;
 
@@ -948,9 +940,6 @@ static void print_counter(struct perf_stat_config *config,
 
 	/* AGGR_THREAD doesn't have config->aggr_get_id */
 	if (!config->aggr_map)
-		return;
-
-	if (counter->merged_stat)
 		return;
 
 	for (s = 0; s < config->aggr_map->nr; s++) {

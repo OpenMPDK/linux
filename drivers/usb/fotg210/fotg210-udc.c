@@ -1014,7 +1014,6 @@ static int fotg210_udc_start(struct usb_gadget *g,
 	int ret;
 
 	/* hook up the driver */
-	driver->driver.bus = NULL;
 	fotg210->driver = driver;
 
 	if (!IS_ERR_OR_NULL(fotg210->phy)) {
@@ -1163,12 +1162,10 @@ int fotg210_udc_probe(struct platform_device *pdev)
 		return -ENODEV;
 	}
 
-	ret = -ENOMEM;
-
 	/* initialize udc */
 	fotg210 = kzalloc(sizeof(struct fotg210_udc), GFP_KERNEL);
 	if (fotg210 == NULL)
-		goto err;
+		return -ENOMEM;
 
 	fotg210->dev = dev;
 
@@ -1178,7 +1175,7 @@ int fotg210_udc_probe(struct platform_device *pdev)
 		ret = clk_prepare_enable(fotg210->pclk);
 		if (ret) {
 			dev_err(dev, "failed to enable PCLK\n");
-			return ret;
+			goto err;
 		}
 	} else if (PTR_ERR(fotg210->pclk) == -EPROBE_DEFER) {
 		/*
@@ -1202,6 +1199,8 @@ int fotg210_udc_probe(struct platform_device *pdev)
 			goto err_pclk;
 		dev_info(dev, "found and initialized PHY\n");
 	}
+
+	ret = -ENOMEM;
 
 	for (i = 0; i < FOTG210_MAX_NUM_EP; i++) {
 		fotg210->ep[i] = kzalloc(sizeof(struct fotg210_ep), GFP_KERNEL);
@@ -1302,8 +1301,7 @@ err_pclk:
 	if (!IS_ERR(fotg210->pclk))
 		clk_disable_unprepare(fotg210->pclk);
 
-	kfree(fotg210);
-
 err:
+	kfree(fotg210);
 	return ret;
 }

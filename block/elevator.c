@@ -57,7 +57,7 @@ static LIST_HEAD(elv_list);
  * Query io scheduler to see if the current process issuing bio may be
  * merged with rq.
  */
-static int elv_iosched_allow_bio_merge(struct request *rq, struct bio *bio)
+static bool elv_iosched_allow_bio_merge(struct request *rq, struct bio *bio)
 {
 	struct request_queue *q = rq->q;
 	struct elevator_queue *e = q->elevator;
@@ -65,7 +65,7 @@ static int elv_iosched_allow_bio_merge(struct request *rq, struct bio *bio)
 	if (e->type->ops.allow_merge)
 		return e->type->ops.allow_merge(q, rq, bio);
 
-	return 1;
+	return true;
 }
 
 /*
@@ -467,7 +467,7 @@ int elv_register_queue(struct request_queue *q, bool uevent)
 
 	lockdep_assert_held(&q->sysfs_lock);
 
-	error = kobject_add(&e->kobj, &q->kobj, "%s", "iosched");
+	error = kobject_add(&e->kobj, &q->disk->queue_kobj, "iosched");
 	if (!error) {
 		struct elv_fs_entry *attr = e->type->elevator_attrs;
 		if (attr) {
@@ -767,26 +767,23 @@ ssize_t elv_iosched_show(struct request_queue *q, char *name)
 	if (!elv_support_iosched(q))
 		return sprintf(name, "none\n");
 
-	if (!q->elevator)
+	if (!q->elevator) {
 		len += sprintf(name+len, "[none] ");
-	else
+	} else {
+		len += sprintf(name+len, "none ");
 		cur = eq->type;
+	}
 
 	spin_lock(&elv_list_lock);
 	list_for_each_entry(e, &elv_list, list) {
-		if (e == cur) {
-			len += sprintf(name+len, "[%s] ", cur->elevator_name);
-			continue;
-		}
-		if (elv_support_features(q, e))
+		if (e == cur)
+			len += sprintf(name+len, "[%s] ", e->elevator_name);
+		else if (elv_support_features(q, e))
 			len += sprintf(name+len, "%s ", e->elevator_name);
 	}
 	spin_unlock(&elv_list_lock);
 
-	if (q->elevator)
-		len += sprintf(name+len, "none");
-
-	len += sprintf(len+name, "\n");
+	len += sprintf(name+len, "\n");
 	return len;
 }
 
