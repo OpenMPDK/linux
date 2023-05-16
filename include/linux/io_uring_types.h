@@ -192,6 +192,13 @@ struct io_alloc_cache {
 	unsigned int		nr_cached;
 };
 
+enum ctx_schedule_status{
+        CTX_SCHED_NONE,
+        CTX_SCHED_WAIT_TAKE,
+        CTX_SCHED_CAN_TAKE,
+        CTX_SCHED_REMOVED
+};
+
 struct io_ring_ctx {
 	/* const or read-mostly hot data */
 	struct {
@@ -267,6 +274,9 @@ struct io_ring_ctx {
 	struct list_head	sqd_list;
 
 	unsigned long		check_cq;
+        enum ctx_schedule_status schedule_state;
+	struct list_head        sqd_merge_list;
+	int			id;
 
 	unsigned int		file_alloc_start;
 	unsigned int		file_alloc_end;

@@ -20,6 +20,7 @@
 #include <linux/sched/task_flags.h>
 #include <linux/sched/task.h>
 #include <linux/sched/topology.h>
+#include <linux/sched/cputime.h>
 
 #include <linux/atomic.h>
 #include <linux/bitmap.h>
