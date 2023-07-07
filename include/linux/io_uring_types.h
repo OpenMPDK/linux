@@ -53,6 +53,7 @@ struct io_uring_task {
 	/* submission side */
 	int				cached_refs;
 	const struct io_ring_ctx 	*last;
+        struct task_struct              *task;
 	struct io_wq			*io_wq;
 	struct file			*registered_rings[IO_RINGFD_REG_MAX];
 
@@ -200,6 +201,7 @@ enum ctx_schedule_status{
 };
 
 struct io_ring_ctx {
+        struct io_uring_task   *io_uring;
 	/* const or read-mostly hot data */
 	struct {
 		struct percpu_ref	refs;

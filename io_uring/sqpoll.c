@@ -21,6 +21,7 @@
 #include <linux/list.h>
 #include <linux/spinlock_types.h>
 #include <linux/spinlock.h>
+#include <linux/limits.h>
 
 #define IORING_SQPOLL_CAP_ENTRIES_VALUE 8
 
@@ -28,14 +29,15 @@ static struct io_sq_data __percpu **percpu_sqd;
 static spinlock_t cpu_util_lock;
 static struct kfifo busy_fifo;
 static spinlock_t busy_fifo_lock;
+static spinlock_t find_cpu;
 static unsigned long merge_time;
 
 #define CTX_FIFO_MAX			32
 #define SCHED_CHECK_TIMEOUT		10*HZ
-#define CTX_MERGE_TIMEOUT		120*HZ
+#define CTX_MERGE_TIMEOUT		30*HZ
 #define TASK_UTIL_THRESHOLD_LOW		256
 #define TASK_UTIL_THRESHOLD_HIGH	(TASK_UTIL_THRESHOLD_LOW*3)
-#define TASK_UTIL_THRESHOLD_MAX		1024
+//#define TASK_IDLE_THRESHOLD_MAX		LLONG_MAX
 #define INVALID_CPU_ID			-1
 
 #define IOURING_DEBUG 1
@@ -56,9 +58,9 @@ enum {
 };
 
 enum SQ_MIGRATION_DIR {
-    MIGRATION_IN,
-    MIGRATION_OUT,
-    MIGRATION_NONE
+        MIGRATION_IN,
+        MIGRATION_OUT,
+        MIGRATION_NONE
 };
 
 static void show_kfifo(void)
@@ -74,7 +76,7 @@ static void show_kfifo(void)
 		return;
 	}
 
-	number = len/sizeof(struct io_ring_ctx *);
+	number = len / sizeof(struct io_ring_ctx *);
 	IOURING_INFO("@@ %d ctxs in kfifo: <id, schedule_state, sq> \n", number);
 	for (index = 0; index < number; index++) {
 		ctx = ctxs[index];
@@ -90,7 +92,6 @@ static void show_sq_and_ctx(void)
 	int cpu;
 	struct task_struct *sq_thread;
 	struct io_sq_data  *sqd;
-	unsigned long task_util;
 	struct io_ring_ctx *ctx, *tmp_ctx;
 
 	sqd = NULL;
@@ -109,9 +110,8 @@ static void show_sq_and_ctx(void)
 			continue;
 		}
 		sq_thread = sqd->thread;
-		task_util = sq_thread->se.avg.util_avg;
-		IOURING_INFO("## sq:%d,   task_util:%lu,  merge_state: %d ##\n", \
-					sqd->sq_cpu, task_util, sqd->merge_state); 
+		IOURING_INFO("## sq:%d,   task_idle:%lu,  task_busy:%lu,  merge_state: %d ##\n", \
+					sqd->sq_cpu, sqd->spin_idle, sqd->spin_busy, sqd->merge_state); 
 
 		IOURING_INFO("ctx_list  : ");
 		list_for_each_entry_safe(ctx, tmp_ctx, &sqd->ctx_list, sqd_list) {
@@ -137,7 +137,7 @@ static void show_sq_and_ctx(void)
 
 unsigned int find_idlest_cpu(void)
 {
-	unsigned long load, min_load = TASK_UTIL_THRESHOLD_MAX;
+	unsigned long load, min_load = 1024;
 	unsigned int id = INVALID_CPU_ID;
 	int i;
 	int idle_id = INVALID_CPU_ID;
@@ -171,6 +171,20 @@ unsigned int find_idlest_cpu(void)
 	return id;
 }
 
+unsigned int sq_thread_load(struct io_sq_data* sqd){
+        unsigned long task_idle = sqd->spin_idle;
+        unsigned long task_busy = sqd->spin_busy;
+        //sqthread is busy
+        if (task_idle < task_busy) {
+            return -1;
+        }
+        //sqthread is idle
+        else if(task_idle > task_busy * 1000){
+            return 1;
+        }
+        return 0;
+}
+
 /*
 * In order to keep workload balance among different sq threads,
 * if task_util of a sq thead is greater than TASK_UTIL_THRESHOLD_HIGH, some of
@@ -181,24 +195,12 @@ unsigned int find_idlest_cpu(void)
 */
 enum SQ_MIGRATION_DIR  io_get_migration_dir(struct io_sq_data* sqd)
 {
-	struct task_struct* sq_thread = sqd->thread;
-	unsigned long cpu_util = task_cfs_rq(sq_thread)->avg.util_avg;
-	unsigned long task_util = sq_thread->se.avg.util_avg;
-
-	if (!cpu_util) {
-		/* IOURING_DBG("sq %d cpu util %ld, task util %ld will migrate out a ctx.\n", \
-			sqd->sq_cpu, cpu_util, task_util); */
+        int sq_load = sq_thread_load(sqd);
+	if (sq_load == -1) {
 		return MIGRATION_OUT;
-	}
-
-	if (task_util >= TASK_UTIL_THRESHOLD_HIGH) {
-		/* IOURING_DBG("sq %d util %ld ready to migrate out a ctx.\n", sqd->sq_cpu, task_util); */
-		return MIGRATION_OUT;
-	} else if (task_util <= TASK_UTIL_THRESHOLD_LOW) {
-		/* IOURING_DBG("sq %d util %ld ready to migrate in a ctx.\n", sqd->sq_cpu, task_util); */
+	} else if (sq_load == 1) {
 		return MIGRATION_IN;
 	}
-	/* IOURING_DBG("sq %d cpu util %ld, task util %ld will migrate none.\n", sqd->sq_cpu, cpu_util, task_util);*/
 	return MIGRATION_NONE;
 }
 
@@ -238,15 +240,15 @@ static bool io_migrate_out(struct io_sq_data* sqd)
 static struct io_ring_ctx* fifo_check_empty_and_take(struct kfifo* fifo,
                 spinlock_t* fifo_lock)
 {
-    unsigned long _flags;
-    struct io_ring_ctx *ctx=NULL;
-    int res;
-    spin_lock_irqsave(fifo_lock, _flags);
-    if(!kfifo_is_empty(fifo)){
-        res = kfifo_out(fifo, &ctx, sizeof(struct io_ring_ctx*));
-    }
-    spin_unlock_irqrestore(fifo_lock, _flags);
-    return ctx;
+        unsigned long _flags;
+        struct io_ring_ctx *ctx=NULL;
+        int res;
+        spin_lock_irqsave(fifo_lock, _flags);
+        if(!kfifo_is_empty(fifo)){
+                res = kfifo_out(fifo, &ctx, sizeof(struct io_ring_ctx*));
+        }
+        spin_unlock_irqrestore(fifo_lock, _flags);
+        return ctx;
 }
 
 /*
@@ -317,7 +319,7 @@ void fifo_remove_ctx(struct io_ring_ctx *ctx)
 	spin_lock_irqsave(&busy_fifo_lock, _flags);
 
 	len = kfifo_len(&busy_fifo);
-	number = len/sizeof(struct io_ring_ctx *);
+	number = len / sizeof(struct io_ring_ctx *);
 	if (0 == number)
 		goto out;
 
@@ -334,6 +336,19 @@ out:
 	spin_unlock_irqrestore(&busy_fifo_lock, _flags);
 }
 
+unsigned int compare_load(struct io_sq_data* sqd, struct io_sq_data* min_load_sqd)
+{
+        if (min_load_sqd == NULL) return 1;
+
+        //Cross Multiplication
+        //when we need to compare which is bigger between a/b and c/d
+        //if a*d > b*c, then a/b > c/d
+        long long ad = sqd->spin_idle * min_load_sqd->spin_busy;
+        long long bc = sqd->spin_busy * min_load_sqd->spin_idle;
+
+        return (ad > bc) ? 1 : 0;
+}
+
 /*
 * If a sq thread only contains one ctx and its utilization is low(eg: < TASK_UTIL_THRESHOLD_LOW),
 * we will reschedule it to a target sq thread which has lowerest utilization.
@@ -345,33 +360,34 @@ static void do_ctx_merge(unsigned long old_merge_time)
 	int i, min_cpu;
 	struct task_struct *sq_thread;
 	struct io_sq_data  *sqd, *min_sqd;
-	unsigned long task_util, min_util;
 	struct io_ring_ctx* ctx;
+        int sq_load;
+        int judge_min;
 	unsigned long new_merge_time = jiffies + CTX_MERGE_TIMEOUT;
 	if(old_merge_time != cmpxchg(&merge_time, old_merge_time, new_merge_time)) {
 		return;
 	}
 	show_sq_and_ctx();
 	min_cpu = INVALID_CPU_ID;
-	min_util = TASK_UTIL_THRESHOLD_MAX;
 	min_sqd = NULL;
 	sqd = NULL;
 	sq_thread = NULL;
 	ctx = NULL;
+        sq_load = 0;
 	for_each_online_cpu(i) {
 		sqd = *per_cpu_ptr(percpu_sqd, i);
 		sq_thread = sqd->thread;
 		sqd->merge_state = SQ_MERGE_NONE;
 		if(list_empty_careful(&sqd->ctx_list))
 			continue;
-		task_util = sq_thread->se.avg.util_avg;
-		/* printk("sq %d task_util %ld.\n", i, task_util);*/
-		if (task_util < TASK_UTIL_THRESHOLD_LOW) {
-			if(task_util < min_util) {
-				min_util = task_util;
-				min_cpu = i;
-				min_sqd = sqd;
-			}
+                sq_load = sq_thread_load(sqd);
+		if (sq_load == 1) {
+                        judge_min = compare_load(sqd, min_sqd);
+			if(judge_min == 1) {
+                                min_sqd = sqd;
+                                min_cpu = i;
+                                min_sqd = sqd;
+                        }
 		}
 	}
 
@@ -380,18 +396,17 @@ static void do_ctx_merge(unsigned long old_merge_time)
 		return;
 	}
 
-	IOURING_INFO("Selected the lightest sq:%d, util: %ld.\n", \
-			min_sqd->sq_cpu, min_util);
+	IOURING_INFO("Selected the lightest sq:%d.\n", \
+			min_sqd->sq_cpu);
 	for_each_online_cpu(i) {
-		if(i == min_cpu)
-			continue;
+		if(i == min_cpu) continue;
 		sqd = *per_cpu_ptr(percpu_sqd, i);
 		sq_thread = sqd->thread;
-		if(list_empty_careful(&sqd->ctx_list))
-			continue;
-		task_util = sq_thread->se.avg.util_avg;
-		if (task_util > TASK_UTIL_THRESHOLD_LOW || !list_is_singular(&sqd->ctx_list))
-			continue;
+
+		if(list_empty_careful(&sqd->ctx_list)) continue;
+		sq_load = sq_thread_load(sqd);
+
+                if (sq_load != 1 || !list_is_singular(&sqd->ctx_list)) continue;
 		ctx = list_first_entry(&sqd->ctx_list, typeof(*ctx), sqd_list);
 		if(ctx) {
 			ctx->schedule_state = CTX_SCHED_CAN_TAKE;
@@ -419,10 +434,13 @@ static struct io_sq_data *io_alloc_sq_data(void)
         init_waitqueue_head(&sqd->wait);
         init_completion(&sqd->exited);
         mutex_init(&sqd->ctx_list_lock);
+        spin_lock_init(&find_cpu);
         sqd->sched_check_timeout = jiffies + SCHED_CHECK_TIMEOUT;
         sqd->sched_ctx = NULL;
         sqd->merge_state = SQ_MERGE_NONE;
         INIT_LIST_HEAD(&sqd->merge_list);
+        sqd->spin_idle = 0;
+        sqd->spin_busy = 0;
         return sqd;
 }
 
@@ -459,6 +477,9 @@ void io_sq_thread_unpark(struct io_sq_data *sqd)
 	if (atomic_dec_return(&sqd->park_pending))
 		set_bit(IO_SQ_THREAD_SHOULD_PARK, &sqd->state);
 	mutex_unlock(&sqd->lock);
+        merge_time = jiffies + CTX_MERGE_TIMEOUT;
+        sqd->spin_busy = 0;
+        sqd->spin_idle = 0;
 }
 
 void io_sq_thread_park(struct io_sq_data *sqd)
@@ -507,13 +528,6 @@ void io_put_sq_data(struct io_sq_data *sqd)
 	refcount_dec(&sqd->refs);
 	IOURING_DBG("@@io_put_sq_data sq(%d) refs:%d\n",sqd->sq_cpu, \
 		refcount_read(&sqd->refs));
-	/*
-	if (refcount_dec_and_test(&sqd->refs)) {
-		WARN_ON_ONCE(atomic_read(&sqd->park_pending));
-
-		io_sq_thread_stop(sqd);
-		kfree(sqd);
-	} */
 }
 /*
 * TODO: the sqd->sq_thread_idle will be 0, when sqd->ctx_list is null
@@ -647,26 +661,25 @@ static int io_sq_thread(void *data)
 	struct io_sq_data *sqd = data;
 	struct io_ring_ctx *ctx;
 	unsigned long timeout = 0;
-        const struct cred *old_cred = NULL;
         struct mm_struct *oldmm, *mm;
+
+        struct io_uring_task *io_tctx;
 	DEFINE_WAIT(wait);
         oldmm = current->mm;
         sqd->thread = current;
 
+        merge_time = jiffies + CTX_MERGE_TIMEOUT;
 	mutex_lock(&sqd->lock);
 	while (1) {
 		bool cap_entries, sqt_spin = false, needs_sched=true;
 		struct io_ring_ctx* temp_ctx;
-		unsigned long cur_jiffies;
 
-		if (io_sqd_handle_event(sqd))
+                if (io_sqd_handle_event(sqd)){
 			timeout = jiffies + sqd->sq_thread_idle;
+                }
 		
 		if (time_after(jiffies, timeout)) {
 			mutex_unlock(&sqd->lock);
-			/* WARN_ONCE(sqd->sq_thread_idle == 0, 
-				"@@ sq(%d) parked for idle time(%u).\n",\
-				sqd->sq_cpu, sqd->sq_thread_idle); */
 			cond_resched();
 			mutex_lock(&sqd->lock);
 			timeout = jiffies + sqd->sq_thread_idle;
@@ -674,9 +687,9 @@ static int io_sq_thread(void *data)
 
                 cap_entries = !list_is_singular(&sqd->ctx_list);
                 mm = current->mm;
+                io_tctx = current->io_uring;
                 list_for_each_entry_safe(ctx, temp_ctx, &sqd->ctx_list, sqd_list) {
                         int ret;
-
                         if (!ctx->rings || percpu_ref_is_dying(&ctx->refs)) {
                                 list_del_init_careful(&ctx->sqd_list);
                                 continue;
@@ -689,22 +702,30 @@ static int io_sq_thread(void *data)
                                 IOURING_INFO("sq %d removed ctx(%d).\n", sqd->sq_cpu, ctx->id);
                                 continue;
                         }
-                        if (current->cred != ctx->sq_creds) {
-                                if (old_cred) revert_creds(old_cred);
-                                old_cred = override_creds(ctx->sq_creds);
-                        }
-                        if(!current->mm)
-                                current->mm = ctx->mm_account;
+                        current->io_uring = ctx->io_uring;
+                        current->mm = ctx->mm_account;
 
                         ret = __io_sq_thread(ctx, cap_entries);
+
                         if (!sqt_spin && (ret > 0 || !wq_list_empty(&ctx->iopoll_list)))
                                 sqt_spin = true;
+
+                        if(ret == 0){
+                            sqd->spin_idle++;
+                        }
+                        else{
+                            sqd->spin_busy++;
+                        }
                 }
+                current->mm = mm;
+                current->io_uring = io_tctx;
 
                 /* Take the scheduled ctx in, if it's removed from the origin sq */
                 if(sqd->sched_ctx && sqd->sched_ctx->schedule_state == CTX_SCHED_REMOVED) {
-                        list_add(&sqd->sched_ctx->sqd_list, &sqd->ctx_list);
+                        list_add_tail(&sqd->sched_ctx->sqd_list, &sqd->ctx_list);
                         IOURING_INFO("sq %d took ctx(%d) in.\n", sqd->sq_cpu, sqd->sched_ctx->id);
+                        sqd->sched_ctx->sq_data->spin_idle = 0;
+                        sqd->sched_ctx->sq_data->spin_busy = 0;
                         sqd->sched_ctx->schedule_state = CTX_SCHED_NONE;
                         sqd->sched_ctx->sq_data = sqd;
                         sqd->sched_ctx = NULL;
@@ -714,7 +735,7 @@ static int io_sq_thread(void *data)
                         list_for_each_entry_safe(ctx, temp_ctx, &sqd->merge_list, sqd_merge_list) {
                                 if(ctx->schedule_state == CTX_SCHED_REMOVED) {
                                         list_del_init_careful(&ctx->sqd_merge_list);
-                                        list_add(&ctx->sqd_list, &sqd->ctx_list);
+                                        list_add_tail(&ctx->sqd_list, &sqd->ctx_list);
                                         ctx->schedule_state = CTX_SCHED_NONE;
                                         ctx->sq_data = sqd;
                                         IOURING_INFO("sq %d merged ctx(%d).\n", sqd->sq_cpu, ctx->id);
@@ -731,28 +752,21 @@ static int io_sq_thread(void *data)
                                         io_migrate_in(sqd);
                                         break;
                                 default:
-                                        /* IOURING_DBG("sq %d will keep unchange.\n", sqd->sq_cpu); */
                                         break;
                         }
                 }
-                cur_jiffies = jiffies;
-                if(time_after(cur_jiffies, merge_time)) {
+
+
+                if(time_after(jiffies, merge_time)) {
                         do_ctx_merge(merge_time);
                 }
 
-                current->mm = mm;
+		if (io_sqd_events_pending(sqd)) continue;
 
-		if (io_sqd_events_pending(sqd)) {
-			IOURING_DBG("sq %d io_sqd_events_pending.\n", sqd->sq_cpu);
-			continue;
-		}
-
-                if (io_run_task_work())
-                        sqt_spin = true;
+                if (io_run_task_work()) sqt_spin = true;
 
 		if (sqt_spin || !time_after(jiffies, timeout)) {
 			mutex_unlock(&sqd->lock);
-			WARN_ONCE(1, "sq %d sqt_spin begin.\n", sqd->sq_cpu);
 			cond_resched();
 			mutex_lock(&sqd->lock);
 			if (sqt_spin)
@@ -774,15 +788,15 @@ static int io_sq_thread(void *data)
                 }
 
 		if (needs_sched) {
-			list_for_each_entry(ctx, &sqd->ctx_list, sqd_list)
-				atomic_or(IORING_SQ_NEED_WAKEUP, &ctx->rings->sq_flags);
+			list_for_each_entry(ctx, &sqd->ctx_list, sqd_list){
+			        atomic_or(IORING_SQ_NEED_WAKEUP, &ctx->rings->sq_flags);
+                        }
 			mutex_unlock(&sqd->lock);
-			IOURING_INFO("@@ sq %d sche begin...\n", sqd->sq_cpu);
 			schedule();
-			IOURING_INFO("@@ sq %d sche end...\n", sqd->sq_cpu);
 			mutex_lock(&sqd->lock);
-			list_for_each_entry(ctx, &sqd->ctx_list, sqd_list)
-				atomic_andnot(IORING_SQ_NEED_WAKEUP, &ctx->rings->sq_flags);
+			list_for_each_entry(ctx, &sqd->ctx_list, sqd_list){
+			        atomic_andnot(IORING_SQ_NEED_WAKEUP, &ctx->rings->sq_flags);
+                        }
 		}
 
 		finish_wait(&sqd->wait, &wait);
@@ -790,8 +804,10 @@ static int io_sq_thread(void *data)
 	}
         current->mm = oldmm;
 	sqd->thread = NULL;
+        current->io_uring = NULL;
+        sqd->spin_idle = 0;
+        sqd->spin_busy = 0;
 	mutex_unlock(&sqd->lock);
-	IOURING_WARN("sq %d io_sq_thread out of loop \n", sqd->sq_cpu);
 	kthread_parkme();
 	return 0;
 }
@@ -837,6 +853,7 @@ __cold int io_sq_offload_create(struct io_ring_ctx *ctx,
 		struct io_sq_data *sqd;
 		bool attached;
 		int cpu_id;
+                unsigned long _flags;
 
 		ret = security_uring_sqpoll();
 		if (ret)
@@ -852,6 +869,7 @@ __cold int io_sq_offload_create(struct io_ring_ctx *ctx,
                 }
 
 		sqd = io_get_sq_data(p, &attached, cpu_id);
+
 		if (IS_ERR(sqd)) {
 			ret = PTR_ERR(sqd);
 			goto err;
@@ -861,24 +879,23 @@ __cold int io_sq_offload_create(struct io_ring_ctx *ctx,
 		ctx->sq_data = sqd;
 		ctx->sq_thread_idle = msecs_to_jiffies(p->sq_thread_idle);
                 if (!ctx->sq_thread_idle)
-                        ctx->sq_thread_idle = 1;
+                        ctx->sq_thread_idle = HZ;
 
                 if(!sqd->thread) {
                         IOURING_ERR("sqd->thread == null \n");
                         goto err;
                 }
-		/* IOURING_INFO("@@ ctx(%d) attached on sq(%d), refs:%u, idle time=%u @@\n", \
-			ctx->id, sqd->sq_cpu, refcount_read(&sqd->refs), ctx->sq_thread_idle); */
 
 		io_sq_thread_park(sqd);
-		list_add(&ctx->sqd_list, &sqd->ctx_list);
+		list_add_tail(&ctx->sqd_list, &sqd->ctx_list);
 		io_sqd_update_thread_idle(sqd);
+		ret = (attached && !sqd->thread) ? -ENXIO : 0;
 		io_sq_thread_unpark(sqd);
+
 		IOURING_INFO("@@ add ctx(%d) to sq(%d) ctx_list success\n", \
 			ctx->id, sqd->sq_cpu);
 		
 		/* don't attach to a dying SQPOLL thread, would be racy */
-		ret = (attached && !sqd->thread) ? -ENXIO : 0;
 		if (ret < 0) {
 			IOURING_WARN("attach ctx(%d) to dying sq(%d) \n", \
 				ctx->id, sqd->sq_cpu);
@@ -888,6 +905,7 @@ __cold int io_sq_offload_create(struct io_ring_ctx *ctx,
                         return 0;
 
 		ret = io_uring_alloc_task_context(sqd->thread, ctx);
+
 		if (ret) {
 			IOURING_WARN("Failed to alloc task context for ctx(%d)\n", ctx->id);
 			goto err;

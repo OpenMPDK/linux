@@ -152,6 +152,7 @@ static void __io_submit_flush_completions(struct io_ring_ctx *ctx);
 static __cold void io_fallback_tw(struct io_uring_task *tctx);
 
 static struct kmem_cache *req_cachep;
+static atomic_t ctx_id = ATOMIC_INIT(0);
 
 struct sock *io_uring_get_socket(struct file *file)
 {
@@ -308,6 +309,9 @@ static __cold struct io_ring_ctx *io_ring_ctx_alloc(struct io_uring_params *p)
 	ctx->flags = p->flags;
 	init_waitqueue_head(&ctx->sqo_sq_wait);
 	INIT_LIST_HEAD(&ctx->sqd_list);
+	ctx->schedule_state = CTX_SCHED_NONE;
+	INIT_LIST_HEAD(&ctx->sqd_merge_list);
+	ctx->id = atomic_inc_return(&ctx_id);
 	INIT_LIST_HEAD(&ctx->cq_overflow_list);
 	INIT_LIST_HEAD(&ctx->io_buffers_cache);
 	io_alloc_cache_init(&ctx->apoll_cache);
@@ -1129,6 +1133,7 @@ static unsigned int handle_tw_list(struct llist_node *node,
 				   struct llist_node *last)
 {
 	unsigned int count = 0;
+        struct mm_struct *mm = NULL;
 
 	while (node != last) {
 		struct llist_node *next = node->next;
@@ -1136,7 +1141,7 @@ static unsigned int handle_tw_list(struct llist_node *node,
 						    io_task_work.node);
 
 		prefetch(container_of(next, struct io_kiocb, io_task_work.node));
-
+                mm = current->mm;
 		if (req->ctx != *ctx) {
 			ctx_flush_and_put(*ctx, locked);
 			*ctx = req->ctx;
@@ -1144,7 +1149,9 @@ static unsigned int handle_tw_list(struct llist_node *node,
 			*locked = mutex_trylock(&(*ctx)->uring_lock);
 			percpu_ref_get(&(*ctx)->refs);
 		}
+                current->mm = req->ctx->mm_account;
 		req->io_task_work.func(req, locked);
+                current->mm = mm;
 		node = next;
 		count++;
 	}
@@ -1261,8 +1268,8 @@ static void io_req_local_work_add(struct io_kiocb *req)
 
 void __io_req_task_work_add(struct io_kiocb *req, bool allow_local)
 {
-	struct io_uring_task *tctx = req->task->io_uring;
 	struct io_ring_ctx *ctx = req->ctx;
+	struct io_uring_task *tctx = ctx->io_uring;
 
 	if (allow_local && ctx->flags & IORING_SETUP_DEFER_TASKRUN) {
 		io_req_local_work_add(req);
@@ -2701,7 +2708,8 @@ static void io_req_caches_free(struct io_ring_ctx *ctx)
 
 static __cold void io_ring_ctx_free(struct io_ring_ctx *ctx)
 {
-	io_sq_thread_finish(ctx);
+	release_ctx_from_sq(ctx);
+	fifo_remove_ctx(ctx);
 	io_rsrc_refs_drop(ctx);
 	/* __io_rsrc_put_work() may need uring_lock to progress, wait w/o it */
 	io_wait_rsrc_data(ctx->buf_data);
@@ -2759,6 +2767,7 @@ static __cold void io_ring_ctx_free(struct io_ring_ctx *ctx)
 	kfree(ctx->dummy_ubuf);
 	kfree(ctx->io_bl);
 	xa_destroy(&ctx->io_bl_xa);
+	printk("@@ free ctx(%d) \n", ctx->id);
 	kfree(ctx);
 }
 
@@ -2768,7 +2777,7 @@ static __poll_t io_uring_poll(struct file *file, poll_table *wait)
 	__poll_t mask = 0;
 
 	poll_wait(file, &ctx->cq_wait, wait);
-	/*
+        /*
 	 * synchronizes with barrier from wq_has_sleeper call in
 	 * io_commit_cqring
 	 */
@@ -2817,10 +2826,11 @@ struct io_tctx_exit {
 
 static __cold void io_tctx_exit_cb(struct callback_head *cb)
 {
-	struct io_uring_task *tctx = current->io_uring;
+	struct io_uring_task *tctx;
 	struct io_tctx_exit *work;
 
 	work = container_of(cb, struct io_tctx_exit, task_work);
+	tctx = work->ctx->io_uring;
 	/*
 	 * When @in_idle, we're in cancellation and it's racy to remove the
 	 * node. It'll be removed by the end of cancellation, just ignore it.
@@ -2828,7 +2838,7 @@ static __cold void io_tctx_exit_cb(struct callback_head *cb)
 	 * work cancelation off the exec path.
 	 */
 	if (tctx && !atomic_read(&tctx->in_idle))
-		io_uring_del_tctx_node((unsigned long)work->ctx);
+		io_uring_del_tctx_node_by_ctx(tctx, work->ctx);
 	complete(&work->completion);
 }
 
@@ -2905,7 +2915,7 @@ static __cold void io_ring_exit_work(struct work_struct *work)
 		/* don't spin on a single task if cancellation failed */
 		list_rotate_left(&ctx->tctx_list);
 		ret = task_work_add(node->task, &exit.task_work, TWA_SIGNAL);
-		if (WARN_ON_ONCE(ret))
+                if (WARN_ON_ONCE(ret))
 			continue;
 
 		mutex_unlock(&ctx->uring_lock);
@@ -3382,7 +3392,7 @@ iopoll_locked:
 			struct __kernel_timespec __user *ts;
 
 			ret2 = io_get_ext_arg(flags, argp, &argsz, &ts, &sig);
-			if (likely(!ret2)) {
+                         if (likely(!ret2)) {
 				min_complete = min(min_complete,
 						   ctx->cq_entries);
 				ret2 = io_cqring_wait(ctx, min_complete, sig,
@@ -3474,9 +3484,8 @@ static __cold int io_allocate_scq_urings(struct io_ring_ctx *ctx,
 static int io_uring_install_fd(struct io_ring_ctx *ctx, struct file *file)
 {
 	int ret, fd;
-
-	fd = get_unused_fd_flags(O_RDWR | O_CLOEXEC);
-	if (fd < 0)
+        fd = get_unused_fd_flags(O_RDWR | O_CLOEXEC);
+        if (fd < 0)
 		return fd;
 
 	ret = __io_uring_add_tctx_node(ctx);

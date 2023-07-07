@@ -86,6 +86,9 @@ __cold int io_uring_alloc_task_context(struct task_struct *task,
 	atomic_set(&tctx->in_idle, 0);
 	atomic_set(&tctx->inflight_tracked, 0);
 	task->io_uring = tctx;
+	ctx->io_uring = tctx;
+        tctx->task = task;
+
 	init_llist_head(&tctx->task_list);
 	init_task_work(&tctx->task_work, tctx_task_work);
 	return 0;
@@ -93,7 +96,7 @@ __cold int io_uring_alloc_task_context(struct task_struct *task,
 
 int __io_uring_add_tctx_node(struct io_ring_ctx *ctx)
 {
-	struct io_uring_task *tctx = current->io_uring;
+	struct io_uring_task *tctx = ctx->io_uring;
 	struct io_tctx_node *node;
 	int ret;
 
@@ -117,7 +120,7 @@ int __io_uring_add_tctx_node(struct io_ring_ctx *ctx)
 		if (!node)
 			return -ENOMEM;
 		node->ctx = ctx;
-		node->task = current;
+		node->task = tctx->task;
 
 		ret = xa_err(xa_store(&tctx->xa, (unsigned long)ctx,
 					node, GFP_KERNEL));
@@ -160,6 +163,28 @@ __cold void io_uring_del_tctx_node(unsigned long index)
 	if (!tctx)
 		return;
 	node = xa_erase(&tctx->xa, index);
+	if (!node)
+		return;
+
+	WARN_ON_ONCE(current != node->task);
+	WARN_ON_ONCE(list_empty(&node->ctx_node));
+
+	mutex_lock(&node->ctx->uring_lock);
+	list_del(&node->ctx_node);
+	mutex_unlock(&node->ctx->uring_lock);
+
+	if (tctx->last == node->ctx)
+		tctx->last = NULL;
+	kfree(node);
+}
+
+__cold void io_uring_del_tctx_node_by_ctx(struct io_uring_task *tctx, struct io_ring_ctx *ctx)
+{
+	struct io_tctx_node *node;
+
+	if (!tctx)
+		return;
+	node = xa_erase(&tctx->xa, (unsigned long)ctx);
 	if (!node)
 		return;
 
