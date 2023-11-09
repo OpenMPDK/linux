@@ -31,8 +31,6 @@ struct io_sq_data {
 
 	enum sq_merge_state     merge_state;
 	struct list_head        merge_list;
-        unsigned long   spin_idle;
-        unsigned long   spin_busy;
 };
 
 int io_sq_offload_create(struct io_ring_ctx *ctx, struct io_uring_params *p);

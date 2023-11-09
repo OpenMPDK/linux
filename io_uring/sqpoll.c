@@ -11,6 +11,7 @@
 #include <linux/audit.h>
 #include <linux/security.h>
 #include <linux/io_uring.h>
+#include <linux/time.h>
 
 #include <uapi/linux/io_uring.h>
 
@@ -110,8 +111,7 @@ static void show_sq_and_ctx(void)
 			continue;
 		}
 		sq_thread = sqd->thread;
-		IOURING_INFO("## sq:%d,   task_idle:%lu,  task_busy:%lu,  merge_state: %d ##\n", \
-					sqd->sq_cpu, sqd->spin_idle, sqd->spin_busy, sqd->merge_state); 
+		IOURING_INFO("## sq:%d, merge_state: %d ##\n", sqd->sq_cpu, sqd->merge_state); 
 
 		IOURING_INFO("ctx_list  : ");
 		list_for_each_entry_safe(ctx, tmp_ctx, &sqd->ctx_list, sqd_list) {
@@ -172,17 +172,14 @@ unsigned int find_idlest_cpu(void)
 }
 
 unsigned int sq_thread_load(struct io_sq_data* sqd){
-        unsigned long task_idle = sqd->spin_idle;
-        unsigned long task_busy = sqd->spin_busy;
-        //sqthread is busy
-        if (task_idle < task_busy) {
-            return -1;
-        }
-        //sqthread is idle
-        else if(task_idle > task_busy * 1000){
-            return 1;
-        }
-        return 0;
+		unsigned long util_avg = sqd->thread->se.sq_avg.util_avg;
+		// sqthread is busy
+		if (util_avg > TASK_UTIL_THRESHOLD_HIGH)
+			return -1;
+		// sqthread is idle
+		else if(util_avg < TASK_UTIL_THRESHOLD_LOW)
+			return 1;
+		return 0;
 }
 
 /*
@@ -336,17 +333,12 @@ out:
 	spin_unlock_irqrestore(&busy_fifo_lock, _flags);
 }
 
-unsigned int compare_load(struct io_sq_data* sqd, struct io_sq_data* min_load_sqd)
+void swap_thread(struct io_sq_data* sqd, struct io_sq_data* min_load_sqd, int* min_cpu, int index)
 {
-        if (min_load_sqd == NULL) return 1;
-
-        //Cross Multiplication
-        //when we need to compare which is bigger between a/b and c/d
-        //if a*d > b*c, then a/b > c/d
-        long long ad = sqd->spin_idle * min_load_sqd->spin_busy;
-        long long bc = sqd->spin_busy * min_load_sqd->spin_idle;
-
-        return (ad > bc) ? 1 : 0;
+	if (min_load_sqd == NULL) 
+		return;
+	if (min_load_sqd->thread->se.sq_avg.util_avg < sqd->thread->se.sq_avg.util_avg)
+		*min_cpu = index;
 }
 
 /*
@@ -380,15 +372,10 @@ static void do_ctx_merge(unsigned long old_merge_time)
 		sqd->merge_state = SQ_MERGE_NONE;
 		if(list_empty_careful(&sqd->ctx_list))
 			continue;
-                sq_load = sq_thread_load(sqd);
-		if (sq_load == 1) {
-                        judge_min = compare_load(sqd, min_sqd);
-			if(judge_min == 1) {
-                                min_sqd = sqd;
-                                min_cpu = i;
-                                min_sqd = sqd;
-                        }
-		}
+
+		sq_load = sq_thread_load(sqd);
+		if (sq_load == 1) 
+			swap_thread(sqd, min_sqd, &min_cpu, i);
 	}
 
 	if(min_cpu == INVALID_CPU_ID) {
@@ -405,8 +392,8 @@ static void do_ctx_merge(unsigned long old_merge_time)
 
 		if(list_empty_careful(&sqd->ctx_list)) continue;
 		sq_load = sq_thread_load(sqd);
-
-                if (sq_load != 1 || !list_is_singular(&sqd->ctx_list)) continue;
+		if (sq_load != 1 || !list_is_singular(&sqd->ctx_list)) 
+			continue;
 		ctx = list_first_entry(&sqd->ctx_list, typeof(*ctx), sqd_list);
 		if(ctx) {
 			ctx->schedule_state = CTX_SCHED_CAN_TAKE;
@@ -439,8 +426,6 @@ static struct io_sq_data *io_alloc_sq_data(void)
         sqd->sched_ctx = NULL;
         sqd->merge_state = SQ_MERGE_NONE;
         INIT_LIST_HEAD(&sqd->merge_list);
-        sqd->spin_idle = 0;
-        sqd->spin_busy = 0;
         return sqd;
 }
 
@@ -478,8 +463,6 @@ void io_sq_thread_unpark(struct io_sq_data *sqd)
 		set_bit(IO_SQ_THREAD_SHOULD_PARK, &sqd->state);
 	mutex_unlock(&sqd->lock);
         merge_time = jiffies + CTX_MERGE_TIMEOUT;
-        sqd->spin_busy = 0;
-        sqd->spin_idle = 0;
 }
 
 void io_sq_thread_park(struct io_sq_data *sqd)
@@ -670,6 +653,10 @@ static int io_sq_thread(void *data)
 
         merge_time = jiffies + CTX_MERGE_TIMEOUT;
 	mutex_lock(&sqd->lock);
+	bool first = true;
+	struct timespec64 ts_start, ts_end;
+	struct timespec64 ts_delta;
+	struct sched_entity *se = &sqd->thread->se;
 	while (1) {
 		bool cap_entries, sqt_spin = false, needs_sched=true;
 		struct io_ring_ctx* temp_ctx;
@@ -688,6 +675,16 @@ static int io_sq_thread(void *data)
                 cap_entries = !list_is_singular(&sqd->ctx_list);
                 mm = current->mm;
                 io_tctx = current->io_uring;
+		ktime_get_boottime_ts64(&ts_start);
+		ts_delta = timespec64_sub(ts_start, ts_end);
+		unsigned long long now = ts_delta.tv_sec * NSEC_PER_SEC + ts_delta.tv_nsec +
+		se->sq_avg.last_update_time;
+
+		if (first) {
+			now = 0;
+			first = false;
+		}
+		__update_sq_avg_block(now, se);
                 list_for_each_entry_safe(ctx, temp_ctx, &sqd->ctx_list, sqd_list) {
                         int ret;
                         if (!ctx->rings || percpu_ref_is_dying(&ctx->refs)) {
@@ -709,14 +706,16 @@ static int io_sq_thread(void *data)
 
                         if (!sqt_spin && (ret > 0 || !wq_list_empty(&ctx->iopoll_list)))
                                 sqt_spin = true;
-
-                        if(ret == 0){
-                            sqd->spin_idle++;
-                        }
-                        else{
-                            sqd->spin_busy++;
-                        }
                 }
+		ktime_get_boottime_ts64(&ts_end);
+		ts_delta = timespec64_sub(ts_end, ts_start);
+		now = ts_delta.tv_sec * NSEC_PER_SEC + ts_delta.tv_nsec +
+		se->sq_avg.last_update_time;
+
+		if (sqt_spin)
+			__update_sq_avg(now, se);
+		else
+			__update_sq_avg_block(now, se);
                 current->mm = mm;
                 current->io_uring = io_tctx;
 
@@ -724,8 +723,6 @@ static int io_sq_thread(void *data)
                 if(sqd->sched_ctx && sqd->sched_ctx->schedule_state == CTX_SCHED_REMOVED) {
                         list_add_tail(&sqd->sched_ctx->sqd_list, &sqd->ctx_list);
                         IOURING_INFO("sq %d took ctx(%d) in.\n", sqd->sq_cpu, sqd->sched_ctx->id);
-                        sqd->sched_ctx->sq_data->spin_idle = 0;
-                        sqd->sched_ctx->sq_data->spin_busy = 0;
                         sqd->sched_ctx->schedule_state = CTX_SCHED_NONE;
                         sqd->sched_ctx->sq_data = sqd;
                         sqd->sched_ctx = NULL;
@@ -805,8 +802,6 @@ static int io_sq_thread(void *data)
         current->mm = oldmm;
 	sqd->thread = NULL;
         current->io_uring = NULL;
-        sqd->spin_idle = 0;
-        sqd->spin_busy = 0;
 	mutex_unlock(&sqd->lock);
 	kthread_parkme();
 	return 0;
