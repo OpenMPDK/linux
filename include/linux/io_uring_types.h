@@ -364,6 +364,8 @@ struct io_ring_ctx {
 	unsigned			sq_thread_idle;
 	/* protected by ->completion_lock */
 	unsigned			evfd_last_cq_tail;
+        int                             poll_state;
+        struct wait_queue_head          poll_wqh;
 };
 
 enum {

@@ -172,6 +172,7 @@ enum {
  * try to do it just before it is needed.
  */
 #define IORING_SETUP_DEFER_TASKRUN	(1U << 13)
+#define IORING_NO_POLL_QUEUE  (1U << 14)
 
 enum io_uring_op {
 	IORING_OP_NOP,

@@ -16,6 +16,7 @@
 #include <linux/suspend.h>
 #include <linux/fs.h>
 #include <linux/module.h>
+#include <linux/io_uring_types.h>
 #include "blk.h"
 
 static inline struct inode *bdev_file_inode(struct file *file)
@@ -286,6 +287,8 @@ static void blkdev_bio_end_io_async(struct bio *bio)
 	struct blkdev_dio *dio = container_of(bio, struct blkdev_dio, bio);
 	struct kiocb *iocb = dio->iocb;
 	ssize_t ret;
+        struct io_kiocb *req = cmd_to_io_kiocb(iocb);
+        struct io_ring_ctx *ctx = req->ctx;
 
 	WRITE_ONCE(iocb->private, NULL);
 
@@ -297,6 +300,9 @@ static void blkdev_bio_end_io_async(struct bio *bio)
 	}
 
 	iocb->ki_complete(iocb, ret);
+
+        if (!ctx->poll_state && ctx->flags & IORING_NO_POLL_QUEUE)
+                wake_up(&ctx->poll_wqh);
 
 	if (dio->flags & DIO_SHOULD_DIRTY) {
 		bio_check_pages_dirty(bio);

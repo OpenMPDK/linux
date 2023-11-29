@@ -120,6 +120,11 @@
 #define IO_COMPL_BATCH			32
 #define IO_REQ_ALLOC_BATCH		8
 
+#define IO_SHOULD_SLEEP(ctx) ((READ_ONCE(ctx->rings->cq.head) - READ_ONCE(ctx->rings->cq.tail)) < min ? 0:1)
+#define IO_POLL_QUEUE 1
+#define IO_NO_POLL_QUEUE 0
+bool limit_recur;
+
 enum {
 	IO_CHECK_CQ_OVERFLOW_BIT,
 	IO_CHECK_CQ_DROPPED_BIT,
@@ -305,6 +310,7 @@ static __cold struct io_ring_ctx *io_ring_ctx_alloc(struct io_uring_params *p)
 		goto err;
 
 	ctx->flags = p->flags;
+        ctx->poll_state = 1;
 	init_waitqueue_head(&ctx->sqo_sq_wait);
 	INIT_LIST_HEAD(&ctx->sqd_list);
 	INIT_LIST_HEAD(&ctx->cq_overflow_list);
@@ -316,6 +322,7 @@ static __cold struct io_ring_ctx *io_ring_ctx_alloc(struct io_uring_params *p)
 	mutex_init(&ctx->uring_lock);
 	init_waitqueue_head(&ctx->cq_wait);
 	init_waitqueue_head(&ctx->poll_wq);
+        init_waitqueue_head(&ctx->poll_wqh);
 	spin_lock_init(&ctx->completion_lock);
 	spin_lock_init(&ctx->timeout_lock);
 	INIT_WQ_LIST(&ctx->iopoll_list);
@@ -1633,8 +1640,12 @@ static int io_iopoll_check(struct io_ring_ctx *ctx, long min)
 			}
 			/* some requests don't go through iopoll_list */
 			if (tail != ctx->cached_cq_tail ||
-			    wq_list_empty(&ctx->iopoll_list))
+			    wq_list_empty(&ctx->iopoll_list)) {
+                                if (ctx->poll_state || !(ctx->flags & IORING_NO_POLL_QUEUE))
+                                        break;
+                                wait_event_interruptible_timeout(ctx->poll_wqh, IO_SHOULD_SLEEP(ctx), HZ);
 				break;
+                        }
 		}
 		ret = io_do_iopoll(ctx, !min);
 		if (ret < 0)
@@ -1652,6 +1663,25 @@ void io_req_task_complete(struct io_kiocb *req, bool *locked)
 		io_req_complete_defer(req);
 	else
 		io_req_complete_post(req, IO_URING_F_UNLOCKED);
+}
+
+/* Get poll queue information of the device */
+int get_poll_queue_state(struct io_kiocb *req)
+{
+        struct super_block *sb;
+        struct block_device *bdev;
+        struct request_queue *q;
+        struct inode *inode;
+
+        inode = req->file->f_inode;
+        sb = inode->i_sb;
+        bdev = blkdev_get_by_dev(inode->i_rdev, FMODE_READ|FMODE_WRITE|FMODE_EXCL, sb);
+        q = bdev->bd_queue;
+        if (!test_bit(QUEUE_FLAG_POLL, &q->queue_flags)) {
+               return IO_NO_POLL_QUEUE;
+        } else {
+               return IO_POLL_QUEUE;
+        }
 }
 
 /*
@@ -1893,6 +1923,7 @@ static int io_issue_sqe(struct io_kiocb *req, unsigned int issue_flags)
 {
 	const struct io_issue_def *def = &io_issue_defs[req->opcode];
 	const struct cred *creds = NULL;
+        struct io_ring_ctx *ctx = req->ctx;
 	int ret;
 
 	if (unlikely(!io_assign_file(req, def, issue_flags)))
@@ -1903,6 +1934,20 @@ static int io_issue_sqe(struct io_kiocb *req, unsigned int issue_flags)
 
 	if (!def->audit_skip)
 		audit_uring_entry(req->opcode);
+
+        /* Not support nvme passthrough yet */
+        if (req->opcode != IORING_OP_URING_CMD && (ctx->flags & IORING_NO_POLL_QUEUE)) {
+                if (!limit_recur) {
+                        ctx->poll_state = get_poll_queue_state(req);
+                        limit_recur = true;
+                }
+                if (!ctx->poll_state) {
+                        ctx->flags &= ~IORING_SETUP_DEFER_TASKRUN;
+                        ctx->flags &= ~IORING_SETUP_SINGLE_ISSUER;
+                }
+        } else {
+                ctx->flags &= ~IORING_NO_POLL_QUEUE;
+        }
 
 	ret = def->issue(req, issue_flags);
 
@@ -1920,9 +1965,11 @@ static int io_issue_sqe(struct io_kiocb *req, unsigned int issue_flags)
 	} else if (ret != IOU_ISSUE_SKIP_COMPLETE)
 		return ret;
 
+        if (ctx->poll_state || !(ctx->flags & IORING_NO_POLL_QUEUE)) {
 	/* If the op doesn't have a file, we're not polling for it */
-	if ((req->ctx->flags & IORING_SETUP_IOPOLL) && def->iopoll_queue)
-		io_iopoll_req_issued(req, issue_flags);
+                if ((req->ctx->flags & IORING_SETUP_IOPOLL) && def->iopoll_queue)
+                        io_iopoll_req_issued(req, issue_flags);
+        }
 
 	return 0;
 }
@@ -3641,6 +3688,7 @@ static __cold int io_uring_create(unsigned entries, struct io_uring_params *p,
 	struct file *file;
 	int ret;
 
+        limit_recur = false;
 	if (!entries)
 		return -EINVAL;
 	if (entries > IORING_MAX_ENTRIES) {
@@ -3843,7 +3891,7 @@ static long io_uring_setup(u32 entries, struct io_uring_params __user *params)
 			IORING_SETUP_R_DISABLED | IORING_SETUP_SUBMIT_ALL |
 			IORING_SETUP_COOP_TASKRUN | IORING_SETUP_TASKRUN_FLAG |
 			IORING_SETUP_SQE128 | IORING_SETUP_CQE32 |
-			IORING_SETUP_SINGLE_ISSUER | IORING_SETUP_DEFER_TASKRUN))
+			IORING_SETUP_SINGLE_ISSUER | IORING_SETUP_DEFER_TASKRUN | IORING_NO_POLL_QUEUE))
 		return -EINVAL;
 
 	return io_uring_create(entries, &p, params);

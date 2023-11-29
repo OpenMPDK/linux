@@ -688,11 +688,14 @@ static int io_rw_init_file(struct io_kiocb *req, fmode_t mode)
 	if (ctx->flags & IORING_SETUP_IOPOLL) {
 		if (!(kiocb->ki_flags & IOCB_DIRECT) || !file->f_op->iopoll)
 			return -EOPNOTSUPP;
-
-		kiocb->private = NULL;
-		kiocb->ki_flags |= IOCB_HIPRI;
-		kiocb->ki_complete = io_complete_rw_iopoll;
-		req->iopoll_completed = 0;
+                if (ctx->poll_state || !(ctx->flags & IORING_NO_POLL_QUEUE)) {
+                        kiocb->private = NULL;
+                        kiocb->ki_flags |= IOCB_HIPRI;
+                        kiocb->ki_complete = io_complete_rw_iopoll;
+                        req->iopoll_completed = 0;
+                } else {
+                        kiocb->ki_complete = io_complete_rw;
+                }
 	} else {
 		if (kiocb->ki_flags & IOCB_HIPRI)
 			return -EINVAL;
