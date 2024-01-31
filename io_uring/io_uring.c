@@ -78,6 +78,8 @@
 
 #include <uapi/linux/io_uring.h>
 
+#include <linux/time.h>
+#include <linux/timekeeping.h>
 #include "io-wq.h"
 
 #include "io_uring.h"
@@ -120,7 +122,6 @@
 #define IO_COMPL_BATCH			32
 #define IO_REQ_ALLOC_BATCH		8
 
-#define IO_SHOULD_SLEEP(ctx) ((READ_ONCE(ctx->rings->cq.head) - READ_ONCE(ctx->rings->cq.tail)) < min ? 0:1)
 #define IO_POLL_QUEUE 1
 #define IO_NO_POLL_QUEUE 0
 bool limit_recur;
@@ -311,6 +312,8 @@ static __cold struct io_ring_ctx *io_ring_ctx_alloc(struct io_uring_params *p)
 
 	ctx->flags = p->flags;
         ctx->poll_state = 1;
+        ctx->req_runtime = 0;
+        ctx->poll_irqtime = 0;
 	init_waitqueue_head(&ctx->sqo_sq_wait);
 	INIT_LIST_HEAD(&ctx->sqd_list);
 	INIT_LIST_HEAD(&ctx->cq_overflow_list);
@@ -322,7 +325,6 @@ static __cold struct io_ring_ctx *io_ring_ctx_alloc(struct io_uring_params *p)
 	mutex_init(&ctx->uring_lock);
 	init_waitqueue_head(&ctx->cq_wait);
 	init_waitqueue_head(&ctx->poll_wq);
-        init_waitqueue_head(&ctx->poll_wqh);
 	spin_lock_init(&ctx->completion_lock);
 	spin_lock_init(&ctx->timeout_lock);
 	INIT_WQ_LIST(&ctx->iopoll_list);
@@ -1640,12 +1642,8 @@ static int io_iopoll_check(struct io_ring_ctx *ctx, long min)
 			}
 			/* some requests don't go through iopoll_list */
 			if (tail != ctx->cached_cq_tail ||
-			    wq_list_empty(&ctx->iopoll_list)) {
-                                if (ctx->poll_state || !(ctx->flags & IORING_NO_POLL_QUEUE))
-                                        break;
-                                wait_event_interruptible_timeout(ctx->poll_wqh, IO_SHOULD_SLEEP(ctx), HZ);
-				break;
-                        }
+			    wq_list_empty(&ctx->iopoll_list))
+                                break;
 		}
 		ret = io_do_iopoll(ctx, !min);
 		if (ret < 0)
@@ -1935,16 +1933,12 @@ static int io_issue_sqe(struct io_kiocb *req, unsigned int issue_flags)
 	if (!def->audit_skip)
 		audit_uring_entry(req->opcode);
 
-        /* Not support nvme passthrough yet */
-        if (req->opcode != IORING_OP_URING_CMD && (ctx->flags & IORING_NO_POLL_QUEUE)) {
+        if ((ctx->flags & IORING_NO_POLL_QUEUE)) {
                 if (!limit_recur) {
                         ctx->poll_state = get_poll_queue_state(req);
                         limit_recur = true;
                 }
-                if (!ctx->poll_state) {
-                        ctx->flags &= ~IORING_SETUP_DEFER_TASKRUN;
-                        ctx->flags &= ~IORING_SETUP_SINGLE_ISSUER;
-                }
+                ktime_get_ts64(&req->iopoll_start);
         } else {
                 ctx->flags &= ~IORING_NO_POLL_QUEUE;
         }
@@ -2220,6 +2214,7 @@ static int io_init_req(struct io_ring_ctx *ctx, struct io_kiocb *req,
 	req->file = NULL;
 	req->rsrc_node = NULL;
 	req->task = current;
+        req->poll_flag = 0;
 
 	if (unlikely(opcode >= IORING_OP_LAST)) {
 		req->opcode = 0;

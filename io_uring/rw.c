@@ -688,14 +688,11 @@ static int io_rw_init_file(struct io_kiocb *req, fmode_t mode)
 	if (ctx->flags & IORING_SETUP_IOPOLL) {
 		if (!(kiocb->ki_flags & IOCB_DIRECT) || !file->f_op->iopoll)
 			return -EOPNOTSUPP;
-                if (ctx->poll_state || !(ctx->flags & IORING_NO_POLL_QUEUE)) {
-                        kiocb->private = NULL;
-                        kiocb->ki_flags |= IOCB_HIPRI;
-                        kiocb->ki_complete = io_complete_rw_iopoll;
-                        req->iopoll_completed = 0;
-                } else {
-                        kiocb->ki_complete = io_complete_rw;
-                }
+
+                kiocb->private = NULL;
+                kiocb->ki_flags |= IOCB_HIPRI;
+                kiocb->ki_complete = io_complete_rw_iopoll;
+                req->iopoll_completed = 0;
 	} else {
 		if (kiocb->ki_flags & IOCB_HIPRI)
 			return -EINVAL;
@@ -1002,6 +999,44 @@ void io_rw_fail(struct io_kiocb *req)
 	io_req_set_res(req, res, req->cqe.flags);
 }
 
+void io_delay(struct io_kiocb *req, struct io_ring_ctx *ctx)
+{
+        struct hrtimer_sleeper timer;
+        ktime_t kt;
+        struct timespec64 tc, oldtc;
+        enum hrtimer_mode mode;
+        long sleep_ti;
+
+        if (req->poll_flag == 1)
+                return;
+
+        if (ctx->req_runtime <= ctx->poll_irqtime || (ctx->req_runtime - ctx->poll_irqtime) < LEFT_TIME)
+                return;
+
+        req->poll_flag = 1;
+        ktime_get_ts64(&oldtc);
+        sleep_ti = (ctx->req_runtime - ctx->poll_irqtime) / 2;
+        kt = ktime_set(0, sleep_ti);
+
+        mode = HRTIMER_MODE_REL;
+        hrtimer_init_sleeper_on_stack(&timer, CLOCK_MONOTONIC, mode);
+        hrtimer_set_expires(&timer.timer, kt);
+
+        set_current_state(TASK_UNINTERRUPTIBLE);
+        hrtimer_sleeper_start_expires(&timer, mode);
+        if (timer.task) {
+                io_schedule();
+        }
+        hrtimer_cancel(&timer.timer);
+        mode = HRTIMER_MODE_ABS;
+
+        __set_current_state(TASK_RUNNING);
+        destroy_hrtimer_on_stack(&timer.timer);
+
+        ktime_get_ts64(&tc);
+        ctx->poll_irqtime = tc.tv_nsec - oldtc.tv_nsec - sleep_ti;
+}
+
 int io_do_iopoll(struct io_ring_ctx *ctx, bool force_nonspin)
 {
 	struct io_wq_work_node *pos, *start, *prev;
@@ -1026,6 +1061,19 @@ int io_do_iopoll(struct io_ring_ctx *ctx, bool force_nonspin)
 		 * If we find a request that requires polling, break out
 		 * and complete those lists first, if we have entries there.
 		 */
+
+                if ((ctx->flags & IORING_NO_POLL_QUEUE) && ctx->poll_state == 0) {
+                        do {
+                                if (READ_ONCE(req->iopoll_completed)) {
+                                        ktime_get_ts64(&req->iopoll_end);
+                                        ctx->req_runtime = req->iopoll_end.tv_nsec - req->iopoll_start.tv_nsec;
+                                        break;
+                                }
+                                io_delay(req, ctx);
+                        } while(1);
+                        goto complete;
+                }
+
 		if (READ_ONCE(req->iopoll_completed))
 			break;
 
@@ -1056,6 +1104,7 @@ int io_do_iopoll(struct io_ring_ctx *ctx, bool force_nonspin)
 	else if (!pos)
 		return 0;
 
+complete:
 	prev = start;
 	wq_list_for_each_resume(pos, prev) {
 		struct io_kiocb *req = container_of(pos, struct io_kiocb, comp_list);

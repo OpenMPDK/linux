@@ -365,7 +365,8 @@ struct io_ring_ctx {
 	/* protected by ->completion_lock */
 	unsigned			evfd_last_cq_tail;
         int                             poll_state;
-        struct wait_queue_head          poll_wqh;
+        long                            req_runtime;
+        long                            poll_irqtime;
 };
 
 enum {
@@ -581,6 +582,9 @@ struct io_kiocb {
 	/* custom credentials, valid IFF REQ_F_CREDS is set */
 	const struct cred		*creds;
 	struct io_wq_work		work;
+        int                             poll_flag;
+        struct timespec64               iopoll_start;
+        struct timespec64               iopoll_end;
 };
 
 struct io_overflow_cqe {
